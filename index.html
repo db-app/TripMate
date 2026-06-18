@@ -254,7 +254,93 @@
     function dayFormHtml(){return `<div id="dayForm" class="card hidden"><h3>Přidat den</h3><div class="row two"><div><label>Datum</label><input id="dayDate" type="date" /></div><div><label>Lokalita</label><input id="dayLocation" /></div><div><label>Ubytování</label><input id="dayAccommodation" /></div><div><label>Odkaz</label><input id="dayLink" /></div></div><div style="margin-top:10px;"><label>Plán dne</label><textarea id="dayPlan"></textarea></div><div style="margin-top:10px;"><label>Poznámky</label><textarea id="dayNotes"></textarea></div><div class="button-row"><button onclick="addDay()">Uložit den</button></div></div>`;}
     function dayPlaceFormHtml(dayId){return `<div class="card" style="margin-top:12px; box-shadow:none;"><h4>Přidat místo k tomuto dni</h4><div class="row two"><div><label>Název místa</label><input id="dayPlaceName_${dayId}" /></div><div><label>Kategorie</label><select id="dayPlaceCategory_${dayId}">${placeCategories.map(c=>`<option>${c}</option>`).join("")}</select></div><div><label>Odkaz na mapu</label><input id="dayPlaceMap_${dayId}" /></div><div><label>Oblíbené / nechci vynechat</label><select id="dayPlaceFavorite_${dayId}"><option value="false">Ne</option><option value="true">Ano</option></select></div></div><div style="margin-top:10px;"><label>Poznámka</label><textarea id="dayPlaceNote_${dayId}"></textarea></div><div class="button-row"><button onclick="addPlaceToDay('${dayId}')">Uložit místo</button></div></div>`;}
     function renderPlaces(trip) { const box=document.getElementById("placesTab"); if(selectedPlaceId){ box.innerHTML=placeDetailHtml(trip, selectedPlaceId); return; } box.innerHTML=`${mapHtml()}<div class="card"><h3>Seznam míst</h3><div id="placeList">${placeListHtml(trip)}</div><div class="button-row"><button onclick="toggleForm('placeForm')">+ Přidat místo</button></div></div>${placeFormHtml(trip)}`; }
-    function mapHtml(){return `<div class="map-image"><svg viewBox="0 0 320 420" role="img" aria-label="Ilustrační mapa Albánie"><rect width="320" height="420" rx="34" fill="#dfeee9"/><path d="M174 24 C145 50 135 82 145 112 C118 129 106 158 121 185 C102 206 106 238 129 258 C121 290 139 326 171 392 C205 342 225 305 218 268 C241 248 249 216 230 190 C252 160 241 122 214 106 C224 74 205 43 174 24 Z" fill="#2f6f63" stroke="#17483f" stroke-width="3"/><path d="M170 32 C166 74 169 116 157 150 C143 188 164 222 154 260 C148 282 158 332 174 385" fill="none" stroke="#ffffff" stroke-width="4" opacity="0.55"/><g font-family="system-ui" font-size="14" font-weight="700" fill="#20312e"><circle cx="169" cy="125" r="7" fill="#fff4d8" stroke="#20312e"/><text x="182" y="130">Tirana</text><circle cx="152" cy="205" r="7" fill="#fff4d8" stroke="#20312e"/><text x="84" y="211">Berat</text><circle cx="142" cy="283" r="7" fill="#fff4d8" stroke="#20312e"/><text x="70" y="289">Himarë</text><circle cx="177" cy="343" r="7" fill="#fff4d8" stroke="#20312e"/><text x="190" y="348">Saranda</text></g><text x="160" y="404" text-anchor="middle" font-size="18" font-weight="800" fill="#2f6f63">Albánie</text></svg><div><h3>Místa na cestě</h3><p class="muted">Místa můžou být přiřazená ke konkrétnímu dni v itineráři, nebo zůstat nepřiřazená. Hvězdičkou si označíš místa, která nechceš vynechat.</p></div></div>`;}
+    function mapHtml(){return `<div class="map-image">
+  <svg viewBox="0 0 360 460" role="img" aria-label="Mapa Albánie">
+    <defs>
+      <linearGradient id="seaBg" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0%" stop-color="#dff4ff"/>
+        <stop offset="100%" stop-color="#f8fbff"/>
+      </linearGradient>
+      <linearGradient id="landFill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#86b98c"/>
+        <stop offset="100%" stop-color="#4d8a57"/>
+      </linearGradient>
+      <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000000" flood-opacity="0.18"/>
+      </filter>
+    </defs>
+
+    <rect width="360" height="460" rx="28" fill="url(#seaBg)"/>
+
+    <!-- moře -->
+    <path d="M40 40 C20 120, 30 220, 48 320 C58 370, 78 410, 96 430 L24 430 L24 40 Z"
+          fill="#ccefff" opacity="0.85"/>
+
+    <!-- pevnina Albánie - čistší stylizace -->
+    <path filter="url(#softShadow)"
+      d="M187 24
+         C171 31, 158 46, 156 65
+         C142 77, 135 94, 138 111
+         C125 126, 121 144, 128 161
+         C118 177, 120 197, 131 214
+         C126 232, 130 251, 140 267
+         C135 291, 142 317, 156 339
+         C162 362, 174 385, 188 412
+         C199 395, 212 377, 221 357
+         C231 334, 234 309, 231 285
+         C245 268, 251 247, 248 227
+         C261 209, 264 186, 255 164
+         C266 142, 264 118, 249 99
+         C254 76, 247 53, 228 39
+         C216 30, 202 24, 187 24 Z"
+      fill="url(#landFill)" stroke="#2f5f38" stroke-width="4"/>
+
+    <!-- jemná vnitřní linka -->
+    <path
+      d="M188 42
+         C184 74, 185 110, 176 145
+         C169 175, 168 204, 171 234
+         C173 266, 175 300, 180 332
+         C182 355, 186 379, 191 399"
+      fill="none" stroke="#ffffff" stroke-width="4" opacity="0.42"/>
+
+    <!-- body měst -->
+    <g font-family="system-ui, sans-serif" font-size="14" font-weight="700" fill="#24322a">
+      <!-- Tirana -->
+      <circle cx="190" cy="118" r="6.5" fill="#f15b5b" stroke="#ffffff" stroke-width="2"/>
+      <line x1="196" y1="118" x2="250" y2="104" stroke="#4a5d55" stroke-width="2"/>
+      <text x="255" y="108">Tirana</text>
+
+      <!-- Berat -->
+      <circle cx="176" cy="188" r="6.5" fill="#f7b955" stroke="#ffffff" stroke-width="2"/>
+      <line x1="170" y1="188" x2="104" y2="184" stroke="#4a5d55" stroke-width="2"/>
+      <text x="48" y="188">Berat</text>
+
+      <!-- Himarë -->
+      <circle cx="165" cy="276" r="6.5" fill="#4c93ff" stroke="#ffffff" stroke-width="2"/>
+      <line x1="159" y1="276" x2="98" y2="286" stroke="#4a5d55" stroke-width="2"/>
+      <text x="42" y="290">Himarë</text>
+
+      <!-- Saranda -->
+      <circle cx="194" cy="356" r="6.5" fill="#9b6bff" stroke="#ffffff" stroke-width="2"/>
+      <line x1="200" y1="356" x2="258" y2="350" stroke="#4a5d55" stroke-width="2"/>
+      <text x="263" y="354">Saranda</text>
+    </g>
+
+    <!-- titulek -->
+    <text x="180" y="438" text-anchor="middle" font-size="22" font-weight="800" fill="#2f6f63">
+      Albánie
+    </text>
+  </svg>
+
+  <div>
+    <h3>Místa na cestě</h3>
+    <p class="muted">
+      Místa můžou být přiřazená ke konkrétnímu dni v itineráři, nebo zůstat nepřiřazená.
+      Hvězdičkou si označíš místa, která nechceš vynechat.
+    </p>
+  </div>
+</div>`;}
     function placeListHtml(trip){const sorted=trip.places.slice().sort((a,b)=>a.isFavorite!==b.isFavorite?(a.isFavorite?-1:1):(a.name||"").localeCompare(b.name||"")); return sorted.length?sorted.map(p=>`<div class="list-item"><h4><button class="place-star" onclick="toggleFavorite('${p.id}')">${p.isFavorite?"★":"☆"}</button>${escapeHtml(p.name)} <span class="pill">${escapeHtml(p.category||p.type||"Ostatní")}</span></h4><p class="muted">${escapeHtml(getDayLabel(trip,p.dayId))}</p><div class="button-row"><button class="secondary" onclick="openPlace('${p.id}')">Detail</button><button class="danger" onclick="deleteItem('places','${p.id}')">Smazat</button></div></div>`).join(""):'<p class="empty">Zatím nejsou zadaná žádná místa.</p>';}
     function placeFormHtml(trip){return `<div id="placeForm" class="card hidden"><h3>Přidat místo</h3><div class="row two"><div><label>Název</label><input id="placeName" /></div><div><label>Kategorie</label><select id="placeCategory">${placeCategories.map(c=>`<option>${c}</option>`).join("")}</select></div><div><label>Stav</label><select id="placeStatus"><option>Chceme navštívit</option><option>Navštíveno</option><option>Přeskočeno</option><option>Doporučujeme</option><option>Nedoporučujeme</option></select></div><div><label>Přiřadit ke dni</label><select id="placeDay"><option value="">Nepřiřazeno k žádnému dni</option>${trip.days.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||"")).map(d=>`<option value="${d.id}">Den ${d.dayNumber} - ${formatDate(d.date)} ${escapeHtml(d.location||"")}</option>`).join("")}</select></div><div><label>Odkaz na mapu</label><input id="placeMap" /></div><div><label>Oblíbené / nechci vynechat</label><select id="placeFavorite"><option value="false">Ne</option><option value="true">Ano</option></select></div></div><div style="margin-top:10px;"><label>Poznámka</label><textarea id="placeNote"></textarea></div><div class="button-row"><button onclick="addPlace()">Uložit místo</button></div></div>`;}
     function placeDetailHtml(trip, placeId){const p=trip.places.find(x=>x.id===placeId); if(!p) return `<div class="card"><p>Místo nenalezeno.</p><button onclick="backToPlaces()">Zpět</button></div>`; if(editingPlaceId===placeId) return editPlaceHtml(trip,p); return `<div class="card detail-card"><h3>${p.isFavorite?"★ ":""}${escapeHtml(p.name)}</h3><p><span class="pill">${escapeHtml(p.category||p.type||"Ostatní")}</span> <span class="pill">${escapeHtml(p.status||"")}</span></p><p><strong>Naplánováno:</strong> ${escapeHtml(getDayLabel(trip,p.dayId))}</p>${p.note?`<p><strong>Poznámka:</strong><br>${escapeHtml(p.note)}</p>`:""}${p.map?`<p><a href="${escapeAttribute(p.map)}" target="_blank" rel="noopener">Otevřít mapu</a></p>`:""}<div class="button-row"><button onclick="startEditPlace('${p.id}')">Upravit místo</button><button class="secondary" onclick="backToPlaces()">Zpět na místa</button><button class="danger" onclick="deleteItem('places','${p.id}')">Smazat místo</button></div></div>`;}
