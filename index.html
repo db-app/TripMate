@@ -119,6 +119,15 @@
         <p class="small">Po vytvoření se podle data od-do automaticky vygeneruje itinerář: Den 1, Den 2, Den 3...</p>
         <div class="button-row"><button onclick="addTrip()">+ Přidat výlet</button></div>
       </div>
+      <div class="card">
+        <h3>Záloha dat</h3>
+        <p class="muted">Export uloží všechna lokální data do JSON souboru. Importem můžeš data obnovit třeba po změně zařízení nebo před větší úpravou appky.</p>
+        <div class="button-row">
+          <button class="secondary" onclick="exportAllData()">Exportovat všechna data</button>
+          <button class="ghost" onclick="document.getElementById('importAllFile').click()">Importovat všechna data</button>
+          <input id="importAllFile" type="file" accept="application/json,.json" class="hidden" onchange="importAllDataFile(this)" />
+        </div>
+      </div>
       <div id="tripList" class="trip-list"></div>
     </section>
 
@@ -262,6 +271,102 @@
     function toggleForm(formId) { document.getElementById(formId)?.classList.toggle("hidden"); }
     function changeDisplayCurrency(currency) { getCurrentTrip().displayCurrency = currency; saveData(); }
     function deleteTrip(tripId) { if (!confirm("Opravdu chceš výlet smazat včetně všech dat?")) return; data.trips = data.trips.filter(t=>t.id!==tripId); currentTripId = null; saveData(); }
+    function safeFileName(value) {
+      return String(value || "tripmate")
+        .toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "tripmate";
+    }
+
+    function downloadJson(filename, payload) {
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function exportCurrentTrip() {
+      const trip = getCurrentTrip();
+      if (!trip) {
+        alert("Není otevřený žádný výlet.");
+        return;
+      }
+      downloadJson(`${safeFileName(trip.name)}-tripmate-export.json`, {
+        app: "TripMate",
+        type: "trip",
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        trip
+      });
+    }
+
+    function exportAllData() {
+      downloadJson(`tripmate-all-data-${today()}.json`, {
+        app: "TripMate",
+        type: "all-data",
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        data
+      });
+    }
+
+    function readJsonFile(input, callback) {
+      const file = input.files && input.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = event => {
+        try {
+          const parsed = JSON.parse(event.target.result);
+          callback(parsed);
+        } catch (error) {
+          alert("Soubor se nepodařilo načíst. Zkontroluj, že jde o platný JSON export z TripMate.");
+        } finally {
+          input.value = "";
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    function importTripFile(input) {
+      readJsonFile(input, payload => {
+        const trip = payload && payload.trip ? payload.trip : payload;
+        if (!trip || !trip.name) {
+          alert("V souboru jsem nenašla platný výlet.");
+          return;
+        }
+        if (!confirm(`Importovat výlet „${trip.name}“ jako novou kopii?`)) return;
+        const importedTrip = JSON.parse(JSON.stringify(trip));
+        importedTrip.id = id();
+        importedTrip.name = `${importedTrip.name} (import)`;
+        migrateTrip(importedTrip);
+        data.trips.push(importedTrip);
+        currentTripId = importedTrip.id;
+        saveData();
+      });
+    }
+
+    function importAllDataFile(input) {
+      readJsonFile(input, payload => {
+        const importedData = payload && payload.data ? payload.data : payload;
+        if (!importedData || !Array.isArray(importedData.trips)) {
+          alert("V souboru jsem nenašla platná TripMate data.");
+          return;
+        }
+        if (!confirm("Import všech dat nahradí aktuální lokální data v tomto prohlížeči. Pokračovat?")) return;
+        data = JSON.parse(JSON.stringify(importedData));
+        data.trips = data.trips || [];
+        data.trips.forEach(migrateTrip);
+        currentTripId = null;
+        saveData();
+      });
+    }
+
     function generateMissingDays() { const trip = getCurrentTrip(); if (!trip.from || !trip.to) { alert("Výlet nemá vyplněné datum od-do."); return; } const gen=generateDays(trip.from,trip.to); const existing=new Set(trip.days.map(d=>d.date)); gen.forEach(d=>{ if(!existing.has(d.date)) trip.days.push(d); }); renumberDays(trip); saveData(); }
     function renumberDays(trip) { trip.days.sort((a,b)=>(a.date||"").localeCompare(b.date||"")).forEach((d,i)=>d.dayNumber=i+1); }
     function addBudget() { const trip=getCurrentTrip(); const amount=Number(val("budgetAmount")); const currency=val("budgetCurrency"); if(!amount){alert("Vyplň částku budgetu."); return;} trip.budgets.push({id:id(), date:val("budgetDate")||today(), amount, currency, type:val("budgetType"), owner:val("budgetOwner").trim(), holder:val("budgetHolder").trim(), note:val("budgetNote").trim()}); clearFields(["budgetDate","budgetAmount","budgetOwner","budgetHolder","budgetNote"]); saveData(); }
@@ -329,7 +434,7 @@
     function render() { if(currentTripId){ document.getElementById("tripsView").classList.add("hidden"); document.getElementById("detailView").classList.remove("hidden"); renderDetail(); } else { document.getElementById("tripsView").classList.remove("hidden"); document.getElementById("detailView").classList.add("hidden"); renderTrips(); } }
     function renderTrips() { const list=document.getElementById("tripList"); if(!data.trips.length){list.innerHTML='<div class="empty">Zatím nemáš žádný výlet. Přidej první nahoře.</div>'; return;} list.innerHTML=data.trips.map(trip=>{migrateTrip(trip); const c=getDisplayCurrency(trip), b=getBudgetTotal(trip,c), s=getExpenseTotal(trip,c); return `<div class="trip-card" onclick="openTrip('${trip.id}')"><h3>${escapeHtml(trip.name)}</h3><p class="muted">${formatDate(trip.from)} ${trip.to ? "- " + formatDate(trip.to) : ""}</p><p><span class="pill">${currencyLabel(c)}</span></p><p class="muted">Budget: ${formatMoney(b,c)}</p><p class="muted">Zbývá: ${formatMoney(b-s,c)}</p></div>`;}).join(""); }
     function renderDetail() { const trip=getCurrentTrip(); if(!trip) return; migrateTrip(trip); const c=getDisplayCurrency(trip), b=getBudgetTotal(trip,c), s=getExpenseTotal(trip,c); document.getElementById("detailTitle").textContent=trip.name; document.getElementById("detailDates").textContent=`${formatDate(trip.from)} ${trip.to ? "- " + formatDate(trip.to) : ""}`; document.getElementById("summaryBudget").textContent=formatMoney(b,c); document.getElementById("summarySpent").textContent=formatMoney(s,c); document.getElementById("summaryLeft").textContent=formatMoney(b-s,c); ["overview","finance","itinerary","places","notes","transport"].forEach(tab=>{document.getElementById(`${tab}Tab`).classList.toggle("hidden", currentTab!==tab); document.getElementById(`tab${capitalize(tab)}`).classList.toggle("active", currentTab===tab);}); renderOverview(trip); renderFinance(trip); renderItinerary(trip); renderPlaces(trip); renderNotes(trip); renderTransport(trip); renderConverter(); }
-    function renderOverview(trip) { const c=getDisplayCurrency(trip), b=getBudgetTotal(trip,c), s=getExpenseTotal(trip,c), left=b-s; const diff=daysUntil(trip.from); let daysText="Datum začátku není vyplněné."; if(diff!==null){ if(diff>0) daysText=`Do začátku výletu zbývá ${diff} dní.`; else if(diff===0) daysText="Výlet začíná dnes."; else daysText=`Výlet začal před ${Math.abs(diff)} dny.`; } const statusCounts={planned:0,done:0,changed:0,skipped:0}; trip.days.forEach(d=>statusCounts[d.dayStatus||"planned"]++); const plan=trip.days.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||"")).slice(0,5).map(d=>`<p><strong>Den ${d.dayNumber}</strong> - ${formatDate(d.date)} ${escapeHtml(d.location||"")} <span class="pill ${dayStatusClass(d.dayStatus)}">${dayStatusText(d.dayStatus)}</span></p>`).join("") || '<p class="empty">Zatím není vytvořený itinerář.</p>'; const counts=Object.fromEntries(noteCategories.map(cat=>[cat, trip.notes.filter(n=>n.category===cat).length])); const checklistNotes=trip.notes.filter(n=>(n.type||"note")==="checklist"); const checklistDone=checklistNotes.reduce((sum,l)=>sum+(l.items||[]).filter(i=>i.done).length,0); const checklistTotal=checklistNotes.reduce((sum,l)=>sum+(l.items||[]).length,0); const catTotals={}; trip.expenses.forEach(e=>catTotals[e.category]=(catTotals[e.category]||0)+convert(e.amount,e.currency,c)); const catHtml=Object.keys(catTotals).length ? Object.entries(catTotals).map(([cat,amount])=>`<p>${cat}: <strong>${formatMoney(amount,c)}</strong></p>`).join("") : '<p class="empty">Zatím nejsou zadané žádné výdaje.</p>'; document.getElementById("overviewTab").innerHTML=`<div class="card"><h3>Rychlý přehled</h3><p><strong>Měna zobrazení:</strong> ${currencyLabel(c)}</p><p><strong>${daysText}</strong></p><p><strong>Stav itineráře:</strong> ${statusCounts.done} splněno / ${statusCounts.changed} změněno / ${statusCounts.skipped} neuskutečněno / ${statusCounts.planned} plánováno</p><p><strong>Checklisty v poznámkách:</strong> ${checklistDone} / ${checklistTotal} položek hotovo</p><div class="button-row"><button class="secondary" onclick="setTab('itinerary')">Otevřít itinerář</button><button class="secondary" onclick="setTab('notes')">Otevřít poznámky</button></div></div><div class="card"><h3>Plán cesty</h3>${plan}</div><div class="card"><h3>Výdaje</h3><p>Budget: <strong>${formatMoney(b,c)}</strong></p><p>Utraceno: <strong>${formatMoney(s,c)}</strong></p><p>Zbývá: <strong>${formatMoney(left,c)}</strong></p><hr style="border:none;border-top:1px solid var(--border);margin:12px 0;"/>${catHtml}</div><div class="card"><h3>Poznámky</h3><p>Informace: <strong>${counts.Informace}</strong></p><p>Dokumenty: <strong>${counts.Dokumenty}</strong></p><p>Deník: <strong>${counts.Deník}</strong></p><div class="button-row"><button class="secondary" onclick="setTab('notes')">Přejít na poznámky</button></div></div><div class="card"><h3>Správa výletu</h3><div class="button-row"><button class="danger" onclick="deleteTrip('${trip.id}')">Smazat výlet</button></div></div>`; }
+    function renderOverview(trip) { const c=getDisplayCurrency(trip), b=getBudgetTotal(trip,c), s=getExpenseTotal(trip,c), left=b-s; const diff=daysUntil(trip.from); let daysText="Datum začátku není vyplněné."; if(diff!==null){ if(diff>0) daysText=`Do začátku výletu zbývá ${diff} dní.`; else if(diff===0) daysText="Výlet začíná dnes."; else daysText=`Výlet začal před ${Math.abs(diff)} dny.`; } const statusCounts={planned:0,done:0,changed:0,skipped:0}; trip.days.forEach(d=>statusCounts[d.dayStatus||"planned"]++); const plan=trip.days.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||"")).slice(0,5).map(d=>`<p><strong>Den ${d.dayNumber}</strong> - ${formatDate(d.date)} ${escapeHtml(d.location||"")} <span class="pill ${dayStatusClass(d.dayStatus)}">${dayStatusText(d.dayStatus)}</span></p>`).join("") || '<p class="empty">Zatím není vytvořený itinerář.</p>'; const counts=Object.fromEntries(noteCategories.map(cat=>[cat, trip.notes.filter(n=>n.category===cat).length])); const checklistNotes=trip.notes.filter(n=>(n.type||"note")==="checklist"); const checklistDone=checklistNotes.reduce((sum,l)=>sum+(l.items||[]).filter(i=>i.done).length,0); const checklistTotal=checklistNotes.reduce((sum,l)=>sum+(l.items||[]).length,0); const catTotals={}; trip.expenses.forEach(e=>catTotals[e.category]=(catTotals[e.category]||0)+convert(e.amount,e.currency,c)); const catHtml=Object.keys(catTotals).length ? Object.entries(catTotals).map(([cat,amount])=>`<p>${cat}: <strong>${formatMoney(amount,c)}</strong></p>`).join("") : '<p class="empty">Zatím nejsou zadané žádné výdaje.</p>'; document.getElementById("overviewTab").innerHTML=`<div class="card"><h3>Rychlý přehled</h3><p><strong>Měna zobrazení:</strong> ${currencyLabel(c)}</p><p><strong>${daysText}</strong></p><p><strong>Stav itineráře:</strong> ${statusCounts.done} splněno / ${statusCounts.changed} změněno / ${statusCounts.skipped} neuskutečněno / ${statusCounts.planned} plánováno</p><p><strong>Checklisty v poznámkách:</strong> ${checklistDone} / ${checklistTotal} položek hotovo</p><div class="button-row"><button class="secondary" onclick="setTab('itinerary')">Otevřít itinerář</button><button class="secondary" onclick="setTab('notes')">Otevřít poznámky</button></div></div><div class="card"><h3>Plán cesty</h3>${plan}</div><div class="card"><h3>Výdaje</h3><p>Budget: <strong>${formatMoney(b,c)}</strong></p><p>Utraceno: <strong>${formatMoney(s,c)}</strong></p><p>Zbývá: <strong>${formatMoney(left,c)}</strong></p><hr style="border:none;border-top:1px solid var(--border);margin:12px 0;"/>${catHtml}</div><div class="card"><h3>Poznámky</h3><p>Informace: <strong>${counts.Informace}</strong></p><p>Dokumenty: <strong>${counts.Dokumenty}</strong></p><p>Deník: <strong>${counts.Deník}</strong></p><div class="button-row"><button class="secondary" onclick="setTab('notes')">Přejít na poznámky</button></div></div><div class="card"><h3>Správa výletu</h3><p class="muted">Tady si můžeš výlet zazálohovat nebo obnovit ze souboru.</p><div class="button-row"><button class="secondary" onclick="exportCurrentTrip()">Exportovat výlet</button><button class="ghost" onclick="document.getElementById('importTripFile').click()">Importovat výlet</button><input id="importTripFile" type="file" accept="application/json,.json" class="hidden" onchange="importTripFile(this)" /><button class="danger" onclick="deleteTrip('${trip.id}')">Smazat výlet</button></div></div>`; }
     function renderFinance(trip) { const c=getDisplayCurrency(trip); document.getElementById("financeTab").innerHTML=`<div class="card"><h3>Finanční zobrazení</h3><div class="row two"><div><label>Zobrazit finance v</label><select id="financeDisplayCurrency" onchange="changeDisplayCurrency(this.value)"><option value="EUR" ${c==="EUR"?"selected":""}>EUR</option><option value="CZK" ${c==="CZK"?"selected":""}>Kč</option><option value="LEK" ${c==="LEK"?"selected":""}>LEK</option></select></div></div><p class="small">Přepínáš jen zobrazení souhrnů. Původní měny záznamů zůstávají zachované.</p></div><div class="card"><h3>Převodník měn</h3><div class="row three"><div><label>Částka</label><input id="convAmount" type="number" inputmode="decimal" placeholder="Např. 100" oninput="renderConverter()" /></div><div><label>Z měny</label><select id="convCurrency" onchange="renderConverter()"><option value="EUR">EUR</option><option value="CZK">Kč</option><option value="LEK">LEK</option></select></div><div><label>Zobrazit</label><select id="convTarget" onchange="renderConverter()"><option value="ALL">Všechny měny</option><option value="EUR">EUR</option><option value="CZK">Kč</option><option value="LEK">LEK</option></select></div></div><div id="converterResult" class="converter-result"></div><p class="small">Pevné orientační kurzy podle zadání.</p></div><div class="card"><div class="button-row"><button onclick="toggleForm('budgetForm')">+ Přidat budget</button><button class="secondary" onclick="toggleForm('expenseForm')">+ Přidat výdaj</button></div></div>${budgetFormHtml()}${expenseFormHtml()}<div class="card"><h3>Budget záznamy</h3><div id="budgetList">${budgetListHtml(trip,c)}</div></div><div class="card"><h3>Výdaje</h3><div id="expenseList">${expenseListHtml(trip,c)}</div></div>`; }
     function budgetFormHtml(){return `<div id="budgetForm" class="card hidden"><h3>Přidat budget</h3><div class="row two"><div><label>Datum</label><input id="budgetDate" type="date" /></div><div><label>Částka</label><input id="budgetAmount" type="number" inputmode="decimal" /></div><div><label>Měna</label><select id="budgetCurrency"><option value="EUR">EUR</option><option value="CZK">Kč</option><option value="LEK">LEK</option></select></div><div><label>Typ</label><select id="budgetType"><option>Startovní hotovost</option><option>Výběr z bankomatu</option><option>Směna</option><option>Doplnění budgetu</option><option>Ostatní</option></select></div><div><label>Komu peníze patří</label><input id="budgetOwner" placeholder="Např. Denisa / muž / společné" /></div><div><label>Kdo je měl / vybíral</label><input id="budgetHolder" placeholder="Např. Denisa" /></div></div><div style="margin-top:10px;"><label>Poznámka / místo</label><input id="budgetNote" /></div><div class="button-row"><button onclick="addBudget()">Uložit budget</button></div></div>`;}
     function expenseFormHtml(){return `<div id="expenseForm" class="card hidden"><h3>Přidat výdaj</h3><div class="row two"><div><label>Datum</label><input id="expenseDate" type="date" /></div><div><label>Popis</label><input id="expenseTitle" /></div><div><label>Částka</label><input id="expenseAmount" type="number" inputmode="decimal" /></div><div><label>Měna</label><select id="expenseCurrency"><option value="EUR">EUR</option><option value="CZK">Kč</option><option value="LEK">LEK</option></select></div><div><label>Kategorie</label><select id="expenseCategory"><option>Jídlo</option><option>Zábava</option><option>Dárky</option><option>Ostatní</option></select></div><div><label>Poznámka</label><input id="expenseNote" /></div></div><div class="button-row"><button onclick="addExpense()">Uložit výdaj</button></div></div>`;}
