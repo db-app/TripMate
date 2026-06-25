@@ -235,17 +235,34 @@
 
     function loadData() {
       const stored = localStorage.getItem(STORAGE_KEY);
-      if (!stored) return { trips: [] };
-      try {
-        const parsed = JSON.parse(stored);
-        parsed.trips = parsed.trips || [];
-        parsed.trips.forEach(migrateTrip);
-        return parsed;
-      } catch (e) { return { trips: [] }; }
+      const backup = localStorage.getItem(BACKUP_KEY);
+      function parsePayload(raw) {
+        if (!raw) return null;
+        try {
+          const parsed = JSON.parse(raw);
+          parsed.trips = Array.isArray(parsed.trips) ? parsed.trips : [];
+          parsed.trips.forEach(migrateTrip);
+          return parsed;
+        } catch (e) {
+          return null;
+        }
+      }
+      const parsed = parsePayload(stored);
+      if (parsed && parsed.trips.length) return parsed;
+      const parsedBackup = parsePayload(backup);
+      if (parsedBackup && parsedBackup.trips.length) {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(parsedBackup));
+        return parsedBackup;
+      }
+      return parsed || { trips: [] };
     }
     function saveData() {
       const trip = getCurrentTrip();
       if (trip && !suppressAutoSync) trip.lastLocalChangeAt = Date.now();
+      try {
+        const previous = localStorage.getItem(STORAGE_KEY);
+        if (previous) localStorage.setItem(BACKUP_KEY, previous);
+      } catch (e) {}
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
       scheduleAutoSync();
       render();
@@ -392,7 +409,25 @@
     function addDay() { const trip=getCurrentTrip(); const date=val("dayDate"), location=val("dayLocation").trim(); if(!date&&!location){alert("Vyplň alespoň datum nebo lokalitu."); return;} trip.days.push({id:id(), dayNumber:trip.days.length+1, date, location, accommodation:val("dayAccommodation").trim(), link:val("dayLink").trim(), plan:val("dayPlan").trim(), notes:val("dayNotes").trim(), dayStatus:"planned"}); renumberDays(trip); clearFields(["dayDate","dayLocation","dayAccommodation","dayLink","dayPlan","dayNotes"]); saveData(); }
     function startEditDay(dayId) { editingDayId = dayId; activeDayPlaceFormId = null; renderDetail(); }
     function cancelEditDay() { editingDayId = null; renderDetail(); }
-    function saveEditedDay(dayId) { const trip=getCurrentTrip(); const day=trip.days.find(d=>d.id===dayId); if(!day) return; const date=val(`editDayDate_${dayId}`), location=val(`editDayLocation_${dayId}`).trim(); if(!date&&!location){alert("Vyplň alespoň datum nebo lokalitu."); return;} day.date=date; day.location=location; day.accommodation=val(`editDayAccommodation_${dayId}`).trim(); day.link=val(`editDayLink_${dayId}`).trim(); day.plan=val(`editDayPlan_${dayId}`).trim(); day.notes=val(`editDayNotes_${dayId}`).trim(); day.dayStatus=val(`editDayStatus_${dayId}`)||"planned"; renumberDays(trip); editingDayId=null; saveData(); }
+    function saveEditedDay(dayId) {
+      const trip = getCurrentTrip();
+      if (!trip) return;
+      const day = trip.days.find(d => d.id === dayId);
+      if (!day) return;
+      const date = val("editDayDate_" + dayId);
+      const location = val("editDayLocation_" + dayId).trim();
+      if (!date && !location) { alert("Vyplň alespoň datum nebo lokalitu."); return; }
+      day.date = date;
+      day.location = location;
+      day.accommodation = val("editDayAccommodation_" + dayId).trim();
+      day.link = val("editDayLink_" + dayId).trim();
+      day.plan = val("editDayPlan_" + dayId).trim();
+      day.notes = val("editDayNotes_" + dayId).trim();
+      day.dayStatus = val("editDayStatus_" + dayId) || "planned";
+      renumberDays(trip);
+      editingDayId = null;
+      saveData();
+    }
     function showDayPlaceForm(dayId) { activeDayPlaceFormId = activeDayPlaceFormId === dayId ? null : dayId; renderDetail(); }
     function addPlaceToDay(dayId) { const trip=getCurrentTrip(); const name=val(`dayPlaceName_${dayId}`).trim(); if(!name){alert("Vyplň název místa."); return;} trip.places.push({id:id(), name, category:val(`dayPlaceCategory_${dayId}`), type:val(`dayPlaceCategory_${dayId}`), status:"Chceme navštívit", dayId, map:val(`dayPlaceMap_${dayId}`).trim(), note:val(`dayPlaceNote_${dayId}`).trim(), isFavorite:val(`dayPlaceFavorite_${dayId}`)==="true"}); activeDayPlaceFormId = null; saveData(); }
     function addPlace() { const trip=getCurrentTrip(); const name=val("placeName").trim(); if(!name){alert("Vyplň název místa."); return;} trip.places.push({id:id(), name, category:val("placeCategory"), type:val("placeCategory"), status:val("placeStatus"), dayId:val("placeDay"), map:val("placeMap").trim(), note:val("placeNote").trim(), isFavorite:val("placeFavorite")==="true"}); clearFields(["placeName","placeMap","placeNote"]); setVal("placeFavorite","false"); saveData(); }
@@ -671,7 +706,7 @@
       if (silent) { if (!firebaseDb) return; } else if (!cloudReady()) return;
       const trip = getCurrentTrip();
       if (!trip || !trip.cloudCode || !trip.cloudPin) {
-        alert("Výlet nemá cloudový kód. Nejdřív vytvoř kód nebo se připoj ke sdílenému výletu.");
+        if (!silent) alert("Výlet nemá cloudový kód. Nejdřív vytvoř kód nebo se připoj ke sdílenému výletu.");
         return;
       }
 
@@ -762,8 +797,16 @@
     function budgetListHtml(trip,c){return trip.budgets.length?trip.budgets.slice().reverse().map(i=>`<div class="list-item"><h4>${formatMoney(i.amount,i.currency)} <span class="pill">${escapeHtml(i.type)}</span></h4><p class="muted">${formatDate(i.date)}</p><p>V aktuálním zobrazení: <strong>${formatMoney(convert(i.amount,i.currency,c),c)}</strong></p><p>Patří: ${escapeHtml(i.owner||"-")}</p><p>Měl/vybíral: ${escapeHtml(i.holder||"-")}</p>${i.note?`<p>Poznámka: ${escapeHtml(i.note)}</p>`:""}<div class="button-row"><button class="danger" onclick="deleteItem('budgets','${i.id}')">Smazat</button></div></div>`).join(""):'<p class="empty">Zatím není zadaný žádný budget.</p>';}
     function expenseListHtml(trip,c){return trip.expenses.length?trip.expenses.slice().reverse().map(i=>`<div class="list-item"><h4>${escapeHtml(i.title)} <span class="pill">${escapeHtml(i.category)}</span></h4><p class="muted">${formatDate(i.date)}</p><p>${formatMoney(i.amount,i.currency)}</p><p>V aktuálním zobrazení: <strong>${formatMoney(convert(i.amount,i.currency,c),c)}</strong></p>${i.note?`<p>Poznámka: ${escapeHtml(i.note)}</p>`:""}<div class="button-row"><button class="danger" onclick="deleteItem('expenses','${i.id}')">Smazat</button></div></div>`).join(""):'<p class="empty">Zatím není zadaný žádný výdaj.</p>';}
     function renderItinerary(trip) { document.getElementById("itineraryTab").innerHTML=`<div class="card"><h3>Itinerář</h3><p class="muted">Každý den může mít vlastní plán a libovolný počet navázaných míst.</p><div id="dayList">${dayListHtml(trip)}</div><div class="button-row"><button onclick="toggleForm('dayForm')">+ Přidat den</button><button class="secondary" onclick="generateMissingDays()">Doplnit dny podle data výletu</button></div></div>${dayFormHtml()}`; }
-    function dayListHtml(trip){return trip.days.length?trip.days.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||"")).map(day=>{if(editingDayId===day.id) return editDayHtml(day); const linked=trip.places.filter(p=>p.dayId===day.id); return `<div class="list-item day-card"><div class="day-header-row"><h4><span class="day-number">Den ${day.dayNumber}</span> ${formatDate(day.date)} ${escapeHtml(day.location||"")}</h4><select class="status-select ${dayStatusClass(day.dayStatus)}" onchange="updateDayStatus('${day.id}', this.value)"><option value="planned" ${(day.dayStatus||"planned")==="planned"?"selected":""}>Plánováno</option><option value="done" ${day.dayStatus==="done"?"selected":""}>Splněno</option><option value="changed" ${day.dayStatus==="changed"?"selected":""}>Změněno</option><option value="skipped" ${day.dayStatus==="skipped"?"selected":""}>Neuskutečněno</option></select></div>${day.accommodation?`<p><strong>Ubytování:</strong> ${escapeHtml(day.accommodation)}</p>`:""}${day.plan?`<p><strong>Plán:</strong> ${escapeHtml(day.plan)}</p>`:""}${linked.length?`<p><strong>Místa:</strong> ${linked.map(p=>`<span class="inline-link" onclick="openPlace('${p.id}')">${p.isFavorite?"★ ":""}${escapeHtml(p.name)}</span>`).join(", ")}</p>`:""}${day.notes?`<p><strong>Poznámky:</strong> ${escapeHtml(day.notes)}</p>`:""}${day.link?`<p><a href="${escapeAttribute(day.link)}" target="_blank" rel="noopener">Otevřít odkaz</a></p>`:""}<div class="button-row"><button onclick="startEditDay('${day.id}')">Upravit den</button><button class="secondary" onclick="showDayPlaceForm('${day.id}')">+ Přidat místo k tomuto dni</button><button class="danger" onclick="deleteItem('days','${day.id}')">Smazat den</button></div>${activeDayPlaceFormId===day.id?dayPlaceFormHtml(day.id):""}</div>`;}).join(""):'<p class="empty">Zatím není zadaný itinerář.</p>';}
-    function editDayHtml(day){return `<div class="list-item day-card"><h4>Upravit den ${day.dayNumber}</h4><div class="row two"><div><label>Datum</label><input id="editDayDate_${day.id}" type="date" value="${escapeAttribute(day.date||"")}" /></div><div><label>Lokalita</label><input id="editDayLocation_${day.id}" value="${escapeAttribute(day.location||"")}" /></div><div><label>Ubytování</label><input id="editDayAccommodation_${day.id}" value="${escapeAttribute(day.accommodation||"")}" /></div><div><label>Odkaz</label><input id="editDayLink_${day.id}" value="${escapeAttribute(day.link||"")}" /></div><div><label>Stav dne</label><select id="editDayStatus_${day.id}"><option value="planned" ${(day.dayStatus||"planned")==="planned"?"selected":""}>Plánováno</option><option value="done" ${day.dayStatus==="done"?"selected":""}>Splněno</option><option value="changed" ${day.dayStatus==="changed"?"selected":""}>Změněno</option><option value="skipped" ${day.dayStatus==="skipped"?"selected":""}>Neuskutečněno</option></select></div></div><div style="margin-top:10px;"><label>Plán dne</label><textarea id="editDayPlan_${day.id}">${escapeHtml(day.plan||"")}</textarea></div><div style="margin-top:10px;"><label>Poznámky</label><textarea id="editDayNotes_${day.id}">${escapeHtml(day.notes||"")}</textarea></div><div class="button-row"><button onclick="saveEditedDay('${day.id}')">Uložit změny</button><button class="secondary" onclick="cancelEditDay()">Zrušit</button></div></div>`;}
+    function dayListHtml(trip){
+      return trip.days.length ? trip.days.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||"")).map(day=>{
+        if (editingDayId === day.id) return editDayHtml(day);
+        const linked=trip.places.filter(p=>p.dayId===day.id);
+        return `<div class="list-item day-card"><div class="day-header-row"><h4><span class="day-number">Den ${day.dayNumber}</span> ${formatDate(day.date)} ${escapeHtml(day.location||"")}</h4><select class="status-select ${dayStatusClass(day.dayStatus)}" onchange="updateDayStatus('${day.id}', this.value)"><option value="planned" ${(day.dayStatus||"planned")==="planned"?"selected":""}>Plánováno</option><option value="done" ${day.dayStatus==="done"?"selected":""}>Splněno</option><option value="changed" ${day.dayStatus==="changed"?"selected":""}>Změněno</option><option value="skipped" ${day.dayStatus==="skipped"?"selected":""}>Neuskutečněno</option></select></div>${day.accommodation?`<p><strong>Ubytování:</strong> ${escapeHtml(day.accommodation)}</p>`:""}${day.plan?`<p><strong>Plán:</strong> ${escapeHtml(day.plan)}</p>`:""}${linked.length?`<p><strong>Místa:</strong> ${linked.map(p=>`<span class="inline-link" onclick="openPlace('${p.id}')">${p.isFavorite?"★ ":""}${escapeHtml(p.name)}</span>`).join(", ")}</p>`:""}${day.notes?`<p><strong>Poznámky:</strong> ${escapeHtml(day.notes)}</p>`:""}${day.link?`<p><a href="${escapeAttribute(day.link)}" target="_blank" rel="noopener">Otevřít odkaz</a></p>`:""}<div class="button-row"><button onclick="startEditDay('${day.id}')">Upravit den</button><button class="secondary" onclick="showDayPlaceForm('${day.id}')">+ Přidat místo k tomuto dni</button><button class="danger" onclick="deleteItem('days','${day.id}')">Smazat den</button></div>${activeDayPlaceFormId===day.id?dayPlaceFormHtml(day.id):""}</div>`;
+      }).join("") : '<p class="empty">Zatím není zadaný itinerář.</p>';
+    }
+    function editDayHtml(day){
+      return `<div class="list-item day-card"><h4>Upravit den ${day.dayNumber}</h4><div class="row two"><div><label>Datum</label><input id="editDayDate_${day.id}" type="date" value="${escapeAttribute(day.date||"")}" /></div><div><label>Lokalita</label><input id="editDayLocation_${day.id}" value="${escapeAttribute(day.location||"")}" /></div><div><label>Ubytování</label><input id="editDayAccommodation_${day.id}" value="${escapeAttribute(day.accommodation||"")}" /></div><div><label>Odkaz</label><input id="editDayLink_${day.id}" value="${escapeAttribute(day.link||"")}" /></div><div><label>Stav dne</label><select id="editDayStatus_${day.id}"><option value="planned" ${(day.dayStatus||"planned")==="planned"?"selected":""}>Plánováno</option><option value="done" ${day.dayStatus==="done"?"selected":""}>Splněno</option><option value="changed" ${day.dayStatus==="changed"?"selected":""}>Změněno</option><option value="skipped" ${day.dayStatus==="skipped"?"selected":""}>Neuskutečněno</option></select></div></div><div style="margin-top:10px;"><label>Plán dne</label><textarea id="editDayPlan_${day.id}">${escapeHtml(day.plan||"")}</textarea></div><div style="margin-top:10px;"><label>Poznámky</label><textarea id="editDayNotes_${day.id}">${escapeHtml(day.notes||"")}</textarea></div><div class="button-row"><button onclick="saveEditedDay('${day.id}')">Uložit změny</button><button class="secondary" onclick="cancelEditDay()">Zrušit</button></div></div>`;
+    }
     function dayFormHtml(){return `<div id="dayForm" class="card hidden"><h3>Přidat den</h3><div class="row two"><div><label>Datum</label><input id="dayDate" type="date" /></div><div><label>Lokalita</label><input id="dayLocation" /></div><div><label>Ubytování</label><input id="dayAccommodation" /></div><div><label>Odkaz</label><input id="dayLink" /></div></div><div style="margin-top:10px;"><label>Plán dne</label><textarea id="dayPlan"></textarea></div><div style="margin-top:10px;"><label>Poznámky</label><textarea id="dayNotes"></textarea></div><div class="button-row"><button onclick="addDay()">Uložit den</button></div></div>`;}
     function dayPlaceFormHtml(dayId){return `<div class="card" style="margin-top:12px; box-shadow:none;"><h4>Přidat místo k tomuto dni</h4><div class="row two"><div><label>Název místa</label><input id="dayPlaceName_${dayId}" /></div><div><label>Kategorie</label><select id="dayPlaceCategory_${dayId}">${placeCategories.map(c=>`<option>${c}</option>`).join("")}</select></div><div><label>Odkaz na mapu</label><input id="dayPlaceMap_${dayId}" /></div><div><label>Oblíbené / nechci vynechat</label><select id="dayPlaceFavorite_${dayId}"><option value="false">Ne</option><option value="true">Ano</option></select></div></div><div style="margin-top:10px;"><label>Poznámka</label><textarea id="dayPlaceNote_${dayId}"></textarea></div><div class="button-row"><button onclick="addPlaceToDay('${dayId}')">Uložit místo</button></div></div>`;}
     function renderPlaces(trip) { const box=document.getElementById("placesTab"); if(selectedPlaceId){ box.innerHTML=placeDetailHtml(trip, selectedPlaceId); return; } box.innerHTML=`${mapHtml()}<div class="card"><h3>Seznam míst</h3><div id="placeList">${placeListHtml(trip)}</div><div class="button-row"><button onclick="toggleForm('placeForm')">+ Přidat místo</button></div></div>${placeFormHtml(trip)}`; }
