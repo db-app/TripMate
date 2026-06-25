@@ -228,6 +228,7 @@
     let autoSyncTimer = null;
     let autoSyncMuted = false;
     let autoSyncLastLoadAt = 0;
+    let autoSyncPollTimer = null;
 
 
     function loadData() {
@@ -522,7 +523,7 @@
       const pin = trip.cloudPin || "";
       return `<div class="card">
         <h3>Sdílení výletu</h3>
-        <p class="muted">Auto sync je jednoduchý a opatrný: po změně se výlet za pár vteřin uloží do cloudu a při otevření appky se zkusí načíst z cloudu. Ruční tlačítka zůstávají jako pojistka.</p>
+        <p class="muted">Auto sync je jednoduchý a opatrný: po změně se výlet za pár vteřin uloží do cloudu a otevřený výlet se pravidelně kontroluje proti cloudu. Ruční tlačítka zůstávají jako pojistka.</p>
         ${code ? `<div class="cloud-box"><p>Kód výletu: <span class="cloud-code">${escapeHtml(code)}</span></p><p>PIN: <span class="cloud-code">${escapeHtml(pin)}</span></p></div>` : `<p class="empty">Výlet zatím není sdílený v cloudu.</p>`}
         <div class="button-row">
           <button class="secondary" onclick="createOrShowCloudShare()">Vytvořit / zobrazit kód</button>
@@ -587,6 +588,7 @@
       renderDetail();
       if (trip.autoSyncEnabled) {
         scheduleAutoCloudSave();
+        startAutoSyncPolling();
         alert("Auto sync je zapnutý.");
       } else {
         clearTimeout(autoSyncTimer);
@@ -601,6 +603,16 @@
       if (Date.now() - autoSyncLastLoadAt < 8000) return;
       autoSyncLastLoadAt = Date.now();
       loadCurrentTripFromCloud(true);
+    }
+
+
+    function startAutoSyncPolling() {
+      clearInterval(autoSyncPollTimer);
+      autoSyncPollTimer = setInterval(() => {
+        const trip = getCurrentTrip();
+        if (!trip || !trip.cloudCode || !trip.cloudPin || trip.autoSyncEnabled === false) return;
+        maybeAutoLoadFromCloud();
+      }, 12000);
     }
 
     window.addEventListener("focus", maybeAutoLoadFromCloud);
@@ -828,6 +840,7 @@
     function escapeAttribute(value){return escapeHtml(value);}
     render();
     setTimeout(maybeAutoLoadFromCloud, 1200);
+    startAutoSyncPolling();
   </script>
 
   <script>

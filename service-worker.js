@@ -1,4 +1,4 @@
-const CACHE_NAME = "tripmate-cache-v12-simple-auto-sync";
+const CACHE_NAME = "tripmate-cache-v13-polling-auto-sync";
 
 const FILES_TO_CACHE = [
   "/TripMate/",
