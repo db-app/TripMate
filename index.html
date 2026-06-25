@@ -225,6 +225,7 @@
     let editingNoteId = null;
     let activeDayPlaceFormId = null;
     let editingDayId = null;
+    let editingTransportId = null;
     let autoSyncTimer = null;
     let autoSyncMuted = false;
     let autoSyncLastLoadAt = 0;
@@ -430,6 +431,33 @@
     function addBudget() { const trip=getCurrentTrip(); const amount=Number(val("budgetAmount")); const currency=val("budgetCurrency"); if(!amount){alert("Vyplň částku budgetu."); return;} trip.budgets.push({id:id(), date:val("budgetDate")||today(), amount, currency, type:val("budgetType"), owner:val("budgetOwner").trim(), holder:val("budgetHolder").trim(), note:val("budgetNote").trim()}); clearFields(["budgetDate","budgetAmount","budgetOwner","budgetHolder","budgetNote"]); saveData(); }
     function addExpense() { const trip=getCurrentTrip(); const title=val("expenseTitle").trim(); const amount=Number(val("expenseAmount")); const currency=val("expenseCurrency"); if(!title||!amount){alert("Vyplň popis a částku výdaje."); return;} trip.expenses.push({id:id(), date:val("expenseDate")||today(), title, amount, currency, category:val("expenseCategory"), note:val("expenseNote").trim()}); clearFields(["expenseDate","expenseTitle","expenseAmount","expenseNote"]); saveData(); }
     function addTransport() { const trip=getCurrentTrip(); const from=val("transportFrom").trim(), to=val("transportTo").trim(); if(!from&&!to){alert("Vyplň alespoň odkud nebo kam."); return;} trip.transport.push({id:id(), type:val("transportType"), isStopover:val("transportStopover"), from, to, date:val("transportDate"), departure:val("transportDeparture"), arrival:val("transportArrival"), number:val("transportNumber").trim(), note:val("transportNote").trim()}); clearFields(["transportFrom","transportTo","transportDate","transportDeparture","transportArrival","transportNumber","transportNote"]); saveData(); }
+    function startEditTransport(transportId) {
+      editingTransportId = transportId;
+      renderDetail();
+    }
+
+    function cancelEditTransport() {
+      editingTransportId = null;
+      renderDetail();
+    }
+
+    function saveEditedTransport(transportId) {
+      const trip = getCurrentTrip();
+      const item = trip.transport.find(t => t.id === transportId);
+      if (!item) return;
+      item.type = val(`editTransportType_${transportId}`);
+      item.isStopover = val(`editTransportStopover_${transportId}`);
+      item.from = val(`editTransportFrom_${transportId}`).trim();
+      item.to = val(`editTransportTo_${transportId}`).trim();
+      item.date = val(`editTransportDate_${transportId}`);
+      item.departure = val(`editTransportDeparture_${transportId}`);
+      item.arrival = val(`editTransportArrival_${transportId}`);
+      item.number = val(`editTransportNumber_${transportId}`).trim();
+      item.note = val(`editTransportNote_${transportId}`).trim();
+      editingTransportId = null;
+      saveData();
+    }
+
     function addDay() { const trip=getCurrentTrip(); const date=val("dayDate"), location=val("dayLocation").trim(); if(!date&&!location){alert("Vyplň alespoň datum nebo lokalitu."); return;} trip.days.push({id:id(), dayNumber:trip.days.length+1, date, location, accommodation:val("dayAccommodation").trim(), link:val("dayLink").trim(), plan:val("dayPlan").trim(), notes:val("dayNotes").trim(), dayStatus:"planned"}); renumberDays(trip); clearFields(["dayDate","dayLocation","dayAccommodation","dayLink","dayPlan","dayNotes"]); saveData(); }
     function startEditDay(dayId) {
       editingDayId = dayId;
@@ -511,7 +539,7 @@
     function dayStatusClass(status) { return `status-${status || "planned"}`; }
     function dayStatusText(status) { return dayStatusLabels[status || "planned"] || "Plánováno"; }
 
-    function deleteItem(collection, itemId) { const trip=getCurrentTrip(); if(collection==="days") { if(editingDayId===itemId) editingDayId=null; trip.places.forEach(p=>{ if(p.dayId===itemId) p.dayId=""; }); } trip[collection]=trip[collection].filter(x=>x.id!==itemId); if(collection==="days") renumberDays(trip); if(collection==="places") selectedPlaceId=null; if(collection==="notes") selectedNoteId=null; saveData(); }
+    function deleteItem(collection, itemId) { const trip=getCurrentTrip(); if(collection==="days") { if(editingDayId===itemId) editingDayId=null; trip.places.forEach(p=>{ if(p.dayId===itemId) p.dayId=""; }); } trip[collection]=trip[collection].filter(x=>x.id!==itemId); if(collection==="days") renumberDays(trip); if(collection==="transport" && editingTransportId===itemId) editingTransportId=null; if(collection==="places") selectedPlaceId=null; if(collection==="notes") selectedNoteId=null; saveData(); }
     function clearFields(ids) { ids.forEach(i=>setVal(i,"")); }
     function val(id) { return document.getElementById(id)?.value || ""; }
     function setVal(id, value) { const el=document.getElementById(id); if(el) el.value=value; }
@@ -831,7 +859,51 @@
     function editNoteHtml(n){const isChecklist=(n.type||"note")==="checklist"; if(isChecklist){return `<div class="card"><h3>Upravit checklist</h3><div class="row two"><div><label>Nadpis</label><input id="editNoteTitle" value="${escapeAttribute(n.title||"")}" /></div><div><label>Kategorie</label><select id="editNoteCategory">${noteCategories.map(c=>`<option ${c===n.category?"selected":""}>${c}</option>`).join("")}</select></div></div><div style="margin-top:10px;"><label>Položky checklistu</label><div id="editChecklistItems">${(n.items||[]).map(item=>`<div class="checklist-input-row"><input class="editChecklistItemText" value="${escapeAttribute(item.text)}" placeholder="Položka checklistu" /><button class="danger" type="button" onclick="this.parentElement.remove()">Smazat</button></div>`).join("")}</div><div class="button-row"><button class="secondary" type="button" onclick="addChecklistInput('editChecklistItems')">+ Přidat položku</button></div></div><div class="button-row"><button onclick="saveEditedNote('${n.id}')">Uložit změny</button><button class="secondary" onclick="editingNoteId=null; renderDetail();">Zrušit</button></div></div>`;} return `<div class="card"><h3>Upravit poznámku</h3><div class="row two"><div><label>Nadpis</label><input id="editNoteTitle" value="${escapeAttribute(n.title||"")}" /></div><div><label>Kategorie</label><select id="editNoteCategory">${noteCategories.map(c=>`<option ${c===n.category?"selected":""}>${c}</option>`).join("")}</select></div></div><div style="margin-top:10px;"><label>Text</label><textarea id="editNoteText">${escapeHtml(n.text||"")}</textarea></div><div style="margin-top:10px;"><label>Odkaz</label><input id="editNoteLink" value="${escapeAttribute(n.link||"")}" /></div><div class="button-row"><button onclick="saveEditedNote('${n.id}')">Uložit změny</button><button class="secondary" onclick="editingNoteId=null; renderDetail();">Zrušit</button></div></div>`;}
 
     function renderTransport(trip) { document.getElementById("transportTab").innerHTML=`<div class="card"><h3>Naplánovaná doprava</h3><div id="transportList">${transportListHtml(trip)}</div><div class="button-row"><button onclick="toggleForm('transportForm')">+ Přidat dopravu</button></div></div>${transportFormHtml()}`; }
-    function transportListHtml(trip){return trip.transport.length?trip.transport.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||"")).map(i=>`<div class="list-item"><h4>${escapeHtml(i.type)} ${i.isStopover==="Ano"?'<span class="pill warning">Stopover</span>':""}</h4><p><strong>${escapeHtml(i.from||"-")}</strong> → <strong>${escapeHtml(i.to||"-")}</strong></p><p class="muted">${formatDate(i.date)} ${i.departure||""}${i.arrival?" - "+i.arrival:""}</p>${i.number?`<p>Spoj/let: ${escapeHtml(i.number)}</p>`:""}${i.note?`<p>${escapeHtml(i.note)}</p>`:""}<div class="button-row"><button class="danger" onclick="deleteItem('transport','${i.id}')">Smazat</button></div></div>`).join(""):'<p class="empty">Zatím není zadaná žádná doprava.</p>';}
+    function transportListHtml(trip){
+      return trip.transport.length ? trip.transport.slice()
+        .sort((a,b)=>((a.date||"")+(a.departure||"")).localeCompare((b.date||"")+(b.departure||"")))
+        .map(i=>{
+          if (editingTransportId === i.id) return editTransportFormHtml(i);
+          return `<div class="list-item">
+            <h4>${escapeHtml(i.type)} ${i.isStopover==="Ano"?'<span class="pill warning">Stopover</span>':""}</h4>
+            <p><strong>${escapeHtml(i.from||"-")}</strong> → <strong>${escapeHtml(i.to||"-")}</strong></p>
+            <p class="muted">${formatDate(i.date)} ${i.departure||""}${i.arrival?" - "+i.arrival:""}</p>
+            ${i.number?`<p>Spoj/let: ${escapeHtml(i.number)}</p>`:""}
+            ${i.note?`<p>${escapeHtml(i.note)}</p>`:""}
+            <div class="button-row">
+              <button class="secondary" onclick="startEditTransport('${i.id}')">Upravit</button>
+              <button class="danger" onclick="deleteItem('transport','${i.id}')">Smazat</button>
+            </div>
+          </div>`;
+        }).join("") : '<p class="empty">Zatím není zadaná žádná doprava.</p>';
+    }
+
+    function editTransportFormHtml(i) {
+      return `<div class="list-item">
+        <h4>Upravit dopravu</h4>
+        <div class="row two">
+          <div><label>Typ</label><select id="editTransportType_${i.id}">
+            ${["Let","Auto","Vlak","Autobus","Loď","Jiné"].map(t=>`<option ${i.type===t?"selected":""}>${t}</option>`).join("")}
+          </select></div>
+          <div><label>Je to stopover / přestup?</label><select id="editTransportStopover_${i.id}">
+            <option value="Ne" ${i.isStopover!=="Ano"?"selected":""}>Ne</option>
+            <option value="Ano" ${i.isStopover==="Ano"?"selected":""}>Ano</option>
+          </select></div>
+          <div><label>Odkud</label><input id="editTransportFrom_${i.id}" value="${escapeAttribute(i.from||"")}" /></div>
+          <div><label>Kam</label><input id="editTransportTo_${i.id}" value="${escapeAttribute(i.to||"")}" /></div>
+          <div><label>Datum</label><input id="editTransportDate_${i.id}" type="date" value="${escapeAttribute(i.date||"")}" /></div>
+          <div><label>Čas odjezdu / odletu</label><input id="editTransportDeparture_${i.id}" type="time" value="${escapeAttribute(i.departure||"")}" /></div>
+          <div><label>Čas příjezdu / příletu</label><input id="editTransportArrival_${i.id}" type="time" value="${escapeAttribute(i.arrival||"")}" /></div>
+          <div><label>Číslo spoje / letu</label><input id="editTransportNumber_${i.id}" value="${escapeAttribute(i.number||"")}" /></div>
+        </div>
+        <div style="margin-top:10px;"><label>Poznámka</label><input id="editTransportNote_${i.id}" value="${escapeAttribute(i.note||"")}" /></div>
+        <div class="button-row">
+          <button onclick="saveEditedTransport('${i.id}')">Uložit změny</button>
+          <button class="ghost" onclick="cancelEditTransport()">Zrušit</button>
+        </div>
+      </div>`;
+    }
+
     function transportFormHtml(){return `<div id="transportForm" class="card hidden"><h3>Přidat dopravu</h3><div class="row two"><div><label>Typ</label><select id="transportType"><option>Let</option><option>Auto</option><option>Vlak</option><option>Autobus</option><option>Loď</option><option>Jiné</option></select></div><div><label>Je to stopover / přestup?</label><select id="transportStopover"><option value="Ne">Ne</option><option value="Ano">Ano</option></select></div><div><label>Odkud</label><input id="transportFrom" /></div><div><label>Kam</label><input id="transportTo" /></div><div><label>Datum</label><input id="transportDate" type="date" /></div><div><label>Čas odjezdu / odletu</label><input id="transportDeparture" type="time" /></div><div><label>Čas příjezdu / příletu</label><input id="transportArrival" type="time" /></div><div><label>Číslo spoje / letu</label><input id="transportNumber" /></div></div><div style="margin-top:10px;"><label>Poznámka</label><input id="transportNote" /></div><div class="button-row"><button onclick="addTransport()">Uložit dopravu</button></div></div>`;}
     function renderConverter(){const a=document.getElementById("convAmount"), f=document.getElementById("convCurrency"), t=document.getElementById("convTarget"), r=document.getElementById("converterResult"); if(!a||!f||!t||!r) return; const amount=Number(a.value||0), from=f.value, target=t.value; if(!amount){r.innerHTML="Zadej částku a měnu."; return;} r.innerHTML=target==="ALL"?`<strong>${formatMoney(amount,from)}</strong><br>≈ ${formatMoney(convert(amount,from,"EUR"),"EUR")}<br>≈ ${formatMoney(convert(amount,from,"CZK"),"CZK")}<br>≈ ${formatMoney(convert(amount,from,"LEK"),"LEK")}`:`<strong>${formatMoney(amount,from)}</strong><br>≈ ${formatMoney(convert(amount,from,target),target)}`;}
     function shortLink(link){try{return new URL(link).hostname.replace("www.","");}catch(e){return link;}}
