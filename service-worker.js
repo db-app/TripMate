@@ -1,4 +1,4 @@
-const CACHE_NAME = "tripmate-cache-v11";
+const CACHE_NAME = "tripmate-cache-v8-edit-days";
 
 const FILES_TO_CACHE = [
   "/TripMate/",
