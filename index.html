@@ -203,6 +203,13 @@
 
     let firebaseDb = null;
     let cloudBusy = false;
+    let autoSyncTimer = null;
+    let autoSyncEnabled = true;
+    let lastCloudSaveAt = 0;
+    let suppressAutoSync = false;
+    let cloudUnsubscribe = null;
+    let lastRemoteUpdatedAt = "";
+
 
     try {
       if (window.firebase && !firebase.apps.length) {
@@ -224,6 +231,7 @@
     let selectedNoteId = null;
     let editingNoteId = null;
     let activeDayPlaceFormId = null;
+    let editingDayId = null;
 
     function loadData() {
       const stored = localStorage.getItem(STORAGE_KEY);
@@ -235,50 +243,12 @@
         return parsed;
       } catch (e) { return { trips: [] }; }
     }
-    function saveData() { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); render(); }
-    function migrateTrip(trip) {
-      trip.currency = trip.currency || "EUR";
-      trip.displayCurrency = trip.displayCurrency || trip.currency || "EUR";
-      trip.budgets = trip.budgets || [];
-      trip.expenses = trip.expenses || [];
-      trip.transport = trip.transport || [];
-      trip.days = trip.days || [];
-      trip.places = trip.places || [];
-      trip.notes = trip.notes || [];
-      trip.checklists = trip.checklists || [];
-      trip.cloudCode = trip.cloudCode || "";
-      trip.cloudPin = trip.cloudPin || "";
-      if (!trip.checklistsMigratedToNotes && trip.checklists.length) {
-        trip.checklists.forEach(list => {
-          trip.notes.push({
-            id: list.id || id(),
-            title: list.title || "Checklist",
-            text: "",
-            link: "",
-            category: list.category && noteCategories.includes(list.category) ? list.category : "Informace",
-            type: "checklist",
-            items: (list.items || []).map(item => ({ id: item.id || id(), text: item.text || "", done: !!item.done })),
-            createdAt: list.createdAt || new Date().toISOString()
-          });
-        });
-        trip.checklistsMigratedToNotes = true;
-      }
-      trip.days.sort((a,b)=>(a.date||"").localeCompare(b.date||"")).forEach((d,i)=>{ d.dayNumber = d.dayNumber || i + 1; d.dayStatus = d.dayStatus || "planned"; });
-      trip.places.forEach(p => {
-        if (p.isFavorite === undefined) p.isFavorite = false;
-        if (p.dayId === undefined) p.dayId = "";
-        p.category = p.category || p.type || "Ostatní";
-        if (!placeCategories.includes(p.category)) p.category = mapOldPlaceCategory(p.category);
-        p.type = p.category;
-      });
-      trip.notes.forEach(n => {
-        n.category = n.category || "Informace";
-        if (!noteCategories.includes(n.category)) n.category = "Informace";
-        n.link = n.link || "";
-        n.type = n.type || "note";
-        n.items = n.items || [];
-        n.items.forEach(item => { item.done = !!item.done; item.text = item.text || ""; });
-      });
+    function saveData() {
+      const trip = getCurrentTrip();
+      if (trip && !suppressAutoSync) trip.lastLocalChangeAt = Date.now();
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      scheduleAutoSync();
+      render();
     }
     function mapOldPlaceCategory(value) {
       if (["Restaurace", "Parkování"].includes(value)) return "Ostatní";
@@ -420,6 +390,9 @@
     function addExpense() { const trip=getCurrentTrip(); const title=val("expenseTitle").trim(); const amount=Number(val("expenseAmount")); const currency=val("expenseCurrency"); if(!title||!amount){alert("Vyplň popis a částku výdaje."); return;} trip.expenses.push({id:id(), date:val("expenseDate")||today(), title, amount, currency, category:val("expenseCategory"), note:val("expenseNote").trim()}); clearFields(["expenseDate","expenseTitle","expenseAmount","expenseNote"]); saveData(); }
     function addTransport() { const trip=getCurrentTrip(); const from=val("transportFrom").trim(), to=val("transportTo").trim(); if(!from&&!to){alert("Vyplň alespoň odkud nebo kam."); return;} trip.transport.push({id:id(), type:val("transportType"), isStopover:val("transportStopover"), from, to, date:val("transportDate"), departure:val("transportDeparture"), arrival:val("transportArrival"), number:val("transportNumber").trim(), note:val("transportNote").trim()}); clearFields(["transportFrom","transportTo","transportDate","transportDeparture","transportArrival","transportNumber","transportNote"]); saveData(); }
     function addDay() { const trip=getCurrentTrip(); const date=val("dayDate"), location=val("dayLocation").trim(); if(!date&&!location){alert("Vyplň alespoň datum nebo lokalitu."); return;} trip.days.push({id:id(), dayNumber:trip.days.length+1, date, location, accommodation:val("dayAccommodation").trim(), link:val("dayLink").trim(), plan:val("dayPlan").trim(), notes:val("dayNotes").trim(), dayStatus:"planned"}); renumberDays(trip); clearFields(["dayDate","dayLocation","dayAccommodation","dayLink","dayPlan","dayNotes"]); saveData(); }
+    function startEditDay(dayId) { editingDayId = dayId; activeDayPlaceFormId = null; renderDetail(); }
+    function cancelEditDay() { editingDayId = null; renderDetail(); }
+    function saveEditedDay(dayId) { const trip=getCurrentTrip(); const day=trip.days.find(d=>d.id===dayId); if(!day) return; const date=val(`editDayDate_${dayId}`), location=val(`editDayLocation_${dayId}`).trim(); if(!date&&!location){alert("Vyplň alespoň datum nebo lokalitu."); return;} day.date=date; day.location=location; day.accommodation=val(`editDayAccommodation_${dayId}`).trim(); day.link=val(`editDayLink_${dayId}`).trim(); day.plan=val(`editDayPlan_${dayId}`).trim(); day.notes=val(`editDayNotes_${dayId}`).trim(); day.dayStatus=val(`editDayStatus_${dayId}`)||"planned"; renumberDays(trip); editingDayId=null; saveData(); }
     function showDayPlaceForm(dayId) { activeDayPlaceFormId = activeDayPlaceFormId === dayId ? null : dayId; renderDetail(); }
     function addPlaceToDay(dayId) { const trip=getCurrentTrip(); const name=val(`dayPlaceName_${dayId}`).trim(); if(!name){alert("Vyplň název místa."); return;} trip.places.push({id:id(), name, category:val(`dayPlaceCategory_${dayId}`), type:val(`dayPlaceCategory_${dayId}`), status:"Chceme navštívit", dayId, map:val(`dayPlaceMap_${dayId}`).trim(), note:val(`dayPlaceNote_${dayId}`).trim(), isFavorite:val(`dayPlaceFavorite_${dayId}`)==="true"}); activeDayPlaceFormId = null; saveData(); }
     function addPlace() { const trip=getCurrentTrip(); const name=val("placeName").trim(); if(!name){alert("Vyplň název místa."); return;} trip.places.push({id:id(), name, category:val("placeCategory"), type:val("placeCategory"), status:val("placeStatus"), dayId:val("placeDay"), map:val("placeMap").trim(), note:val("placeNote").trim(), isFavorite:val("placeFavorite")==="true"}); clearFields(["placeName","placeMap","placeNote"]); setVal("placeFavorite","false"); saveData(); }
@@ -485,14 +458,15 @@
       const pin = trip.cloudPin || "";
       return `<div class="card">
         <h3>Sdílení výletu</h3>
-        <p class="muted">Cloud sync je zatím ruční: změny uložíš do cloudu tlačítkem a na druhém zařízení je načteš. Automatickou synchronizaci můžeme přidat později.</p>
+        <p class="muted">Automatický sync: změny se po pár vteřinách uloží do cloudu a na druhém zařízení se načtou po otevření appky nebo při návratu do ní. Ruční tlačítka nechávám jako pojistku.</p>
         ${code ? `<div class="cloud-box"><p>Kód výletu: <span class="cloud-code">${escapeHtml(code)}</span></p><p>PIN: <span class="cloud-code">${escapeHtml(pin)}</span></p></div>` : `<p class="empty">Výlet zatím není sdílený v cloudu.</p>`}
         <div class="button-row">
           <button class="secondary" onclick="createOrShowCloudShare()">Vytvořit / zobrazit kód</button>
           <button class="secondary" onclick="saveCurrentTripToCloud()">Uložit do cloudu</button>
           <button class="ghost" onclick="loadCurrentTripFromCloud()">Načíst z cloudu</button>
+          <button class="ghost" onclick="toggleAutoSync()">${trip.autoSyncEnabled ? "Vypnout auto sync" : "Zapnout auto sync"}</button>
         </div>
-        <p id="cloudStatus" class="sync-status"></p>
+        <p id="cloudStatus" class="sync-status">${trip.cloudCode ? (trip.autoSyncEnabled ? "Auto sync je zapnutý." : "Auto sync je vypnutý.") : ""}</p>
       </div>`;
     }
 
@@ -526,6 +500,118 @@
       if (el) el.textContent = message || "";
     }
 
+    function getTripByCloudCode(code) {
+      const normalized = normalizeCloudCode(code);
+      return data.trips.find(t => normalizeCloudCode(t.cloudCode) === normalized) || null;
+    }
+
+    function setTripSilently(trip) {
+      const index = data.trips.findIndex(t => t.id === trip.id || normalizeCloudCode(t.cloudCode) === normalizeCloudCode(trip.cloudCode));
+      if (index >= 0) data.trips[index] = trip;
+      else data.trips.push(trip);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    }
+
+    function scheduleAutoSync() {
+      if (suppressAutoSync) return;
+      const trip = getCurrentTrip();
+      if (!trip || !trip.cloudCode || !trip.cloudPin || trip.autoSyncEnabled === false) return;
+      if (!firebaseDb) return;
+      clearTimeout(autoSyncTimer);
+      autoSyncTimer = setTimeout(() => {
+        saveCurrentTripToCloud(false, true);
+      }, 2500);
+    }
+
+    function toggleAutoSync() {
+      const trip = getCurrentTrip();
+      if (!trip) return;
+      trip.autoSyncEnabled = trip.autoSyncEnabled === false;
+      if (trip.autoSyncEnabled && !trip.cloudCode) {
+        trip.cloudCode = generateCloudCode();
+        trip.cloudPin = generatePin();
+      }
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      if (trip.autoSyncEnabled) {
+        startCloudListener();
+        scheduleAutoSync();
+        alert("Auto sync je zapnutý.");
+      } else {
+        stopCloudListener();
+        alert("Auto sync je vypnutý.");
+      }
+      renderDetail();
+    }
+
+    function stopCloudListener() {
+      if (cloudUnsubscribe) {
+        cloudUnsubscribe();
+        cloudUnsubscribe = null;
+      }
+    }
+
+    function startCloudListener() {
+      stopCloudListener();
+      const trip = getCurrentTrip();
+      if (!firebaseDb || !trip || !trip.cloudCode || !trip.cloudPin || trip.autoSyncEnabled === false) return;
+
+      const code = normalizeCloudCode(trip.cloudCode);
+      cloudUnsubscribe = firebaseDb.collection("sharedTrips").doc(code).onSnapshot(snapshot => {
+        if (!snapshot.exists) return;
+        const payload = snapshot.data();
+        if (!payload || String(payload.pin) !== String(trip.cloudPin)) return;
+        if (!payload.updatedAt || payload.updatedAt === lastRemoteUpdatedAt) return;
+
+        const localTrip = getTripByCloudCode(code);
+        if (!localTrip) return;
+
+        const remoteUpdated = new Date(payload.updatedAt).getTime();
+        const localTouched = Number(localTrip.lastLocalChangeAt || 0);
+        const justSaved = Date.now() - lastCloudSaveAt < 5000;
+
+        if (justSaved) {
+          lastRemoteUpdatedAt = payload.updatedAt;
+          return;
+        }
+
+        if (localTouched && remoteUpdated && localTouched > remoteUpdated) {
+          return;
+        }
+
+        const incoming = prepareCloudTrip(payload.trip, code, localTrip.cloudPin);
+        incoming.autoSyncEnabled = localTrip.autoSyncEnabled !== false;
+        suppressAutoSync = true;
+        setTripSilently(incoming);
+        suppressAutoSync = false;
+        lastRemoteUpdatedAt = payload.updatedAt;
+        if (currentTripId === localTrip.id) {
+          currentTripId = incoming.id;
+          render();
+          setCloudStatus("Načteno z cloudu automaticky.");
+        }
+      }, error => {
+        console.warn("Cloud listener failed:", error);
+      });
+    }
+
+    window.addEventListener("focus", () => {
+      const trip = getCurrentTrip();
+      if (trip && trip.cloudCode && trip.autoSyncEnabled !== false) {
+        loadCurrentTripFromCloud(true);
+        startCloudListener();
+      }
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) {
+        const trip = getCurrentTrip();
+        if (trip && trip.cloudCode && trip.autoSyncEnabled !== false) {
+          loadCurrentTripFromCloud(true);
+          startCloudListener();
+        }
+      }
+    });
+
     function cloneForCloud(trip) {
       const clone = JSON.parse(JSON.stringify(trip));
       delete clone.cloudPin;
@@ -545,28 +631,34 @@
       if (!trip) return;
       if (!trip.cloudCode) trip.cloudCode = generateCloudCode();
       if (!trip.cloudPin) trip.cloudPin = generatePin();
+      trip.autoSyncEnabled = true;
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
       renderDetail();
       await saveCurrentTripToCloud(false);
+      startCloudListener();
       alert(`Sdílený výlet:\nKód: ${trip.cloudCode}\nPIN: ${trip.cloudPin}`);
     }
 
-    async function saveCurrentTripToCloud(showAlert = true) {
-      if (!cloudReady()) return;
+    async function saveCurrentTripToCloud(showAlert = true, isAuto = false) {
+      if (isAuto) { if (!firebaseDb) return; } else if (!cloudReady()) return;
       const trip = getCurrentTrip();
       if (!trip) return;
       if (!trip.cloudCode) trip.cloudCode = generateCloudCode();
       if (!trip.cloudPin) trip.cloudPin = generatePin();
 
-      setCloudStatus("Ukládám do cloudu...");
+      setCloudStatus(isAuto ? "Automaticky ukládám do cloudu..." : "Ukládám do cloudu...");
       try {
+        const updatedAt = new Date().toISOString();
         await firebaseDb.collection("sharedTrips").doc(normalizeCloudCode(trip.cloudCode)).set({
           pin: String(trip.cloudPin),
-          updatedAt: new Date().toISOString(),
+          updatedAt,
           trip: cloneForCloud(trip)
         });
+        lastCloudSaveAt = Date.now();
+        lastRemoteUpdatedAt = updatedAt;
         localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-        setCloudStatus("Uloženo do cloudu.");
+        setCloudStatus(isAuto ? "Automaticky uloženo do cloudu." : "Uloženo do cloudu.");
+        startCloudListener();
         if (showAlert) alert("Výlet je uložený v cloudu.");
       } catch (error) {
         console.error(error);
@@ -575,8 +667,8 @@
       }
     }
 
-    async function loadCurrentTripFromCloud() {
-      if (!cloudReady()) return;
+    async function loadCurrentTripFromCloud(silent = false) {
+      if (silent) { if (!firebaseDb) return; } else if (!cloudReady()) return;
       const trip = getCurrentTrip();
       if (!trip || !trip.cloudCode || !trip.cloudPin) {
         alert("Výlet nemá cloudový kód. Nejdřív vytvoř kód nebo se připoj ke sdílenému výletu.");
@@ -588,25 +680,31 @@
         const snap = await firebaseDb.collection("sharedTrips").doc(normalizeCloudCode(trip.cloudCode)).get();
         if (!snap.exists) {
           setCloudStatus("Výlet v cloudu nenalezen.");
-          alert("Výlet v cloudu nenalezen.");
+          if (!silent) alert("Výlet v cloudu nenalezen.");
           return;
         }
         const payload = snap.data();
         if (String(payload.pin) !== String(trip.cloudPin)) {
           setCloudStatus("PIN nesouhlasí.");
-          alert("PIN nesouhlasí.");
+          if (!silent) alert("PIN nesouhlasí.");
           return;
         }
         const incoming = prepareCloudTrip(payload.trip, trip.cloudCode, trip.cloudPin);
-        const index = data.trips.findIndex(t => t.id === trip.id);
+        incoming.autoSyncEnabled = trip.autoSyncEnabled !== false;
+        const index = data.trips.findIndex(t => t.id === trip.id || normalizeCloudCode(t.cloudCode) === normalizeCloudCode(trip.cloudCode));
         if (index >= 0) data.trips[index] = incoming;
         currentTripId = incoming.id;
+        lastRemoteUpdatedAt = payload.updatedAt || "";
+        suppressAutoSync = true;
         saveData();
-        alert("Výlet byl načtený z cloudu.");
+        suppressAutoSync = false;
+        startCloudListener();
+        if (!silent) alert("Výlet byl načtený z cloudu.");
+        else setCloudStatus("Načteno z cloudu automaticky.");
       } catch (error) {
         console.error(error);
         setCloudStatus("Načtení z cloudu se nepovedlo.");
-        alert("Načtení z cloudu se nepovedlo. Zkontroluj Firestore a připojení.");
+        if (!silent) alert("Načtení z cloudu se nepovedlo. Zkontroluj Firestore a připojení.");
       }
     }
 
@@ -630,7 +728,7 @@
         const payload = snap.data();
         if (String(payload.pin) !== pin) {
           setJoinCloudStatus("PIN nesouhlasí.");
-          alert("PIN nesouhlasí.");
+          if (!silent) alert("PIN nesouhlasí.");
           return;
         }
 
@@ -642,10 +740,12 @@
           data.trips.push(incoming);
         }
         currentTripId = incoming.id;
+        incoming.autoSyncEnabled = true;
         currentTab = "overview";
         setVal("joinCloudCode", "");
         setVal("joinCloudPin", "");
         saveData();
+        startCloudListener();
       } catch (error) {
         console.error(error);
         setJoinCloudStatus("Připojení se nepovedlo.");
@@ -662,7 +762,8 @@
     function budgetListHtml(trip,c){return trip.budgets.length?trip.budgets.slice().reverse().map(i=>`<div class="list-item"><h4>${formatMoney(i.amount,i.currency)} <span class="pill">${escapeHtml(i.type)}</span></h4><p class="muted">${formatDate(i.date)}</p><p>V aktuálním zobrazení: <strong>${formatMoney(convert(i.amount,i.currency,c),c)}</strong></p><p>Patří: ${escapeHtml(i.owner||"-")}</p><p>Měl/vybíral: ${escapeHtml(i.holder||"-")}</p>${i.note?`<p>Poznámka: ${escapeHtml(i.note)}</p>`:""}<div class="button-row"><button class="danger" onclick="deleteItem('budgets','${i.id}')">Smazat</button></div></div>`).join(""):'<p class="empty">Zatím není zadaný žádný budget.</p>';}
     function expenseListHtml(trip,c){return trip.expenses.length?trip.expenses.slice().reverse().map(i=>`<div class="list-item"><h4>${escapeHtml(i.title)} <span class="pill">${escapeHtml(i.category)}</span></h4><p class="muted">${formatDate(i.date)}</p><p>${formatMoney(i.amount,i.currency)}</p><p>V aktuálním zobrazení: <strong>${formatMoney(convert(i.amount,i.currency,c),c)}</strong></p>${i.note?`<p>Poznámka: ${escapeHtml(i.note)}</p>`:""}<div class="button-row"><button class="danger" onclick="deleteItem('expenses','${i.id}')">Smazat</button></div></div>`).join(""):'<p class="empty">Zatím není zadaný žádný výdaj.</p>';}
     function renderItinerary(trip) { document.getElementById("itineraryTab").innerHTML=`<div class="card"><h3>Itinerář</h3><p class="muted">Každý den může mít vlastní plán a libovolný počet navázaných míst.</p><div id="dayList">${dayListHtml(trip)}</div><div class="button-row"><button onclick="toggleForm('dayForm')">+ Přidat den</button><button class="secondary" onclick="generateMissingDays()">Doplnit dny podle data výletu</button></div></div>${dayFormHtml()}`; }
-    function dayListHtml(trip){return trip.days.length?trip.days.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||"")).map(day=>{const linked=trip.places.filter(p=>p.dayId===day.id); return `<div class="list-item day-card"><div class="day-header-row"><h4><span class="day-number">Den ${day.dayNumber}</span> ${formatDate(day.date)} ${escapeHtml(day.location||"")}</h4><select class="status-select ${dayStatusClass(day.dayStatus)}" onchange="updateDayStatus('${day.id}', this.value)"><option value="planned" ${(day.dayStatus||"planned")==="planned"?"selected":""}>Plánováno</option><option value="done" ${day.dayStatus==="done"?"selected":""}>Splněno</option><option value="changed" ${day.dayStatus==="changed"?"selected":""}>Změněno</option><option value="skipped" ${day.dayStatus==="skipped"?"selected":""}>Neuskutečněno</option></select></div>${day.accommodation?`<p><strong>Ubytování:</strong> ${escapeHtml(day.accommodation)}</p>`:""}${day.plan?`<p><strong>Plán:</strong> ${escapeHtml(day.plan)}</p>`:""}${linked.length?`<p><strong>Místa:</strong> ${linked.map(p=>`<span class="inline-link" onclick="openPlace('${p.id}')">${p.isFavorite?"★ ":""}${escapeHtml(p.name)}</span>`).join(", ")}</p>`:""}${day.notes?`<p><strong>Poznámky:</strong> ${escapeHtml(day.notes)}</p>`:""}${day.link?`<p><a href="${escapeAttribute(day.link)}" target="_blank" rel="noopener">Otevřít odkaz</a></p>`:""}<div class="button-row"><button class="secondary" onclick="showDayPlaceForm('${day.id}')">+ Přidat místo k tomuto dni</button><button class="danger" onclick="deleteItem('days','${day.id}')">Smazat den</button></div>${activeDayPlaceFormId===day.id?dayPlaceFormHtml(day.id):""}</div>`;}).join(""):'<p class="empty">Zatím není zadaný itinerář.</p>';}
+    function dayListHtml(trip){return trip.days.length?trip.days.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||"")).map(day=>{if(editingDayId===day.id) return editDayHtml(day); const linked=trip.places.filter(p=>p.dayId===day.id); return `<div class="list-item day-card"><div class="day-header-row"><h4><span class="day-number">Den ${day.dayNumber}</span> ${formatDate(day.date)} ${escapeHtml(day.location||"")}</h4><select class="status-select ${dayStatusClass(day.dayStatus)}" onchange="updateDayStatus('${day.id}', this.value)"><option value="planned" ${(day.dayStatus||"planned")==="planned"?"selected":""}>Plánováno</option><option value="done" ${day.dayStatus==="done"?"selected":""}>Splněno</option><option value="changed" ${day.dayStatus==="changed"?"selected":""}>Změněno</option><option value="skipped" ${day.dayStatus==="skipped"?"selected":""}>Neuskutečněno</option></select></div>${day.accommodation?`<p><strong>Ubytování:</strong> ${escapeHtml(day.accommodation)}</p>`:""}${day.plan?`<p><strong>Plán:</strong> ${escapeHtml(day.plan)}</p>`:""}${linked.length?`<p><strong>Místa:</strong> ${linked.map(p=>`<span class="inline-link" onclick="openPlace('${p.id}')">${p.isFavorite?"★ ":""}${escapeHtml(p.name)}</span>`).join(", ")}</p>`:""}${day.notes?`<p><strong>Poznámky:</strong> ${escapeHtml(day.notes)}</p>`:""}${day.link?`<p><a href="${escapeAttribute(day.link)}" target="_blank" rel="noopener">Otevřít odkaz</a></p>`:""}<div class="button-row"><button onclick="startEditDay('${day.id}')">Upravit den</button><button class="secondary" onclick="showDayPlaceForm('${day.id}')">+ Přidat místo k tomuto dni</button><button class="danger" onclick="deleteItem('days','${day.id}')">Smazat den</button></div>${activeDayPlaceFormId===day.id?dayPlaceFormHtml(day.id):""}</div>`;}).join(""):'<p class="empty">Zatím není zadaný itinerář.</p>';}
+    function editDayHtml(day){return `<div class="list-item day-card"><h4>Upravit den ${day.dayNumber}</h4><div class="row two"><div><label>Datum</label><input id="editDayDate_${day.id}" type="date" value="${escapeAttribute(day.date||"")}" /></div><div><label>Lokalita</label><input id="editDayLocation_${day.id}" value="${escapeAttribute(day.location||"")}" /></div><div><label>Ubytování</label><input id="editDayAccommodation_${day.id}" value="${escapeAttribute(day.accommodation||"")}" /></div><div><label>Odkaz</label><input id="editDayLink_${day.id}" value="${escapeAttribute(day.link||"")}" /></div><div><label>Stav dne</label><select id="editDayStatus_${day.id}"><option value="planned" ${(day.dayStatus||"planned")==="planned"?"selected":""}>Plánováno</option><option value="done" ${day.dayStatus==="done"?"selected":""}>Splněno</option><option value="changed" ${day.dayStatus==="changed"?"selected":""}>Změněno</option><option value="skipped" ${day.dayStatus==="skipped"?"selected":""}>Neuskutečněno</option></select></div></div><div style="margin-top:10px;"><label>Plán dne</label><textarea id="editDayPlan_${day.id}">${escapeHtml(day.plan||"")}</textarea></div><div style="margin-top:10px;"><label>Poznámky</label><textarea id="editDayNotes_${day.id}">${escapeHtml(day.notes||"")}</textarea></div><div class="button-row"><button onclick="saveEditedDay('${day.id}')">Uložit změny</button><button class="secondary" onclick="cancelEditDay()">Zrušit</button></div></div>`;}
     function dayFormHtml(){return `<div id="dayForm" class="card hidden"><h3>Přidat den</h3><div class="row two"><div><label>Datum</label><input id="dayDate" type="date" /></div><div><label>Lokalita</label><input id="dayLocation" /></div><div><label>Ubytování</label><input id="dayAccommodation" /></div><div><label>Odkaz</label><input id="dayLink" /></div></div><div style="margin-top:10px;"><label>Plán dne</label><textarea id="dayPlan"></textarea></div><div style="margin-top:10px;"><label>Poznámky</label><textarea id="dayNotes"></textarea></div><div class="button-row"><button onclick="addDay()">Uložit den</button></div></div>`;}
     function dayPlaceFormHtml(dayId){return `<div class="card" style="margin-top:12px; box-shadow:none;"><h4>Přidat místo k tomuto dni</h4><div class="row two"><div><label>Název místa</label><input id="dayPlaceName_${dayId}" /></div><div><label>Kategorie</label><select id="dayPlaceCategory_${dayId}">${placeCategories.map(c=>`<option>${c}</option>`).join("")}</select></div><div><label>Odkaz na mapu</label><input id="dayPlaceMap_${dayId}" /></div><div><label>Oblíbené / nechci vynechat</label><select id="dayPlaceFavorite_${dayId}"><option value="false">Ne</option><option value="true">Ano</option></select></div></div><div style="margin-top:10px;"><label>Poznámka</label><textarea id="dayPlaceNote_${dayId}"></textarea></div><div class="button-row"><button onclick="addPlaceToDay('${dayId}')">Uložit místo</button></div></div>`;}
     function renderPlaces(trip) { const box=document.getElementById("placesTab"); if(selectedPlaceId){ box.innerHTML=placeDetailHtml(trip, selectedPlaceId); return; } box.innerHTML=`${mapHtml()}<div class="card"><h3>Seznam míst</h3><div id="placeList">${placeListHtml(trip)}</div><div class="button-row"><button onclick="toggleForm('placeForm')">+ Přidat místo</button></div></div>${placeFormHtml(trip)}`; }
@@ -687,6 +788,7 @@
     function escapeHtml(value){return String(value||"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;");}
     function escapeAttribute(value){return escapeHtml(value);}
     render();
+    startCloudListener();
   </script>
 
   <script>
