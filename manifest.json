@@ -1,18 +1,1 @@
-{
-  "name": "TripMate",
-  "short_name": "TripMate",
-  "description": "Planner pro výlety, itinerář, finance, místa a poznámky.",
-  "start_url": "/TripMate/",
-  "scope": "/TripMate/",
-  "display": "standalone",
-  "background_color": "#f6f4ef",
-  "theme_color": "#2f6f63",
-  "icons": [
-    {
-      "src": "icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
-    }
-  ]
-}
+{"name":"TripMate","short_name":"TripMate","start_url":"/TripMate/","scope":"/TripMate/","display":"standalone","background_color":"#f6f4ef","theme_color":"#2f6f63","icons":[{"src":"icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}

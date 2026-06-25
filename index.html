@@ -130,6 +130,20 @@
           <input id="importAllFile" type="file" accept="application/json,.json" class="hidden" onchange="importAllDataFile(this)" />
         </div>
       </div>
+
+      <div class="card">
+        <h3>Připojit sdílený výlet</h3>
+        <p class="muted">Zadej kód a PIN výletu, který byl vytvořený na jiném zařízení. Výlet se stáhne do tohoto zařízení.</p>
+        <div class="row two">
+          <div><label>Kód výletu</label><input id="joinCloudCode" placeholder="Např. TM-AB12CD" /></div>
+          <div><label>PIN</label><input id="joinCloudPin" placeholder="Např. 4821" /></div>
+        </div>
+        <div class="button-row">
+          <button class="secondary" onclick="joinCloudTrip()">Připojit výlet z cloudu</button>
+        </div>
+        <p id="joinCloudStatus" class="sync-status"></p>
+      </div>
+
       <div id="tripList" class="trip-list"></div>
     </section>
 
@@ -157,6 +171,9 @@
     </section>
   </main>
 
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
+
   <script>
     const STORAGE_KEY = "tripmate_data_v5";
     const olderKeys = ["tripmate_data_v4", "tripmate_data_v3", "tripmate_data_v2", "tripmate_data_v1"];
@@ -173,6 +190,32 @@
     const placeCategories = ["Pláž", "Výlet", "Město", "Příroda", "Sport", "Ubytování", "Ostatní"];
     const noteCategories = ["Informace", "Dokumenty", "Deník"];
     const dayStatusLabels = { planned: "Plánováno", done: "Splněno", changed: "Změněno", skipped: "Neuskutečněno" };
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyALBY5lAnwHoCp31ns-L3cCjSDK81PQt-I",
+      authDomain: "tripmate-db.firebaseapp.com",
+      projectId: "tripmate-db",
+      storageBucket: "tripmate-db.firebasestorage.app",
+      messagingSenderId: "388442501034",
+      appId: "1:388442501034:web:933fa7081be93e8eb645d3",
+      measurementId: "G-MJSTM7H7ME"
+    };
+
+    let firebaseDb = null;
+    let cloudBusy = false;
+
+    try {
+      if (window.firebase && !firebase.apps.length) {
+        firebase.initializeApp(firebaseConfig);
+      }
+      if (window.firebase) {
+        firebaseDb = firebase.firestore();
+        firebaseDb.enablePersistence({ synchronizeTabs: true }).catch(() => {});
+      }
+    } catch (error) {
+      console.warn("Firebase initialization failed:", error);
+    }
+
     let data = loadData();
     let currentTripId = null;
     let currentTab = "overview";
@@ -203,6 +246,8 @@
       trip.places = trip.places || [];
       trip.notes = trip.notes || [];
       trip.checklists = trip.checklists || [];
+      trip.cloudCode = trip.cloudCode || "";
+      trip.cloudPin = trip.cloudPin || "";
       if (!trip.checklistsMigratedToNotes && trip.checklists.length) {
         trip.checklists.forEach(list => {
           trip.notes.push({
@@ -434,9 +479,183 @@
     function setVal(id, value) { const el=document.getElementById(id); if(el) el.value=value; }
 
     function render() { if(currentTripId){ document.getElementById("tripsView").classList.add("hidden"); document.getElementById("detailView").classList.remove("hidden"); renderDetail(); } else { document.getElementById("tripsView").classList.remove("hidden"); document.getElementById("detailView").classList.add("hidden"); renderTrips(); } }
+
+    function cloudShareHtml(trip) {
+      const code = trip.cloudCode || "";
+      const pin = trip.cloudPin || "";
+      return `<div class="card">
+        <h3>Sdílení výletu</h3>
+        <p class="muted">Cloud sync je zatím ruční: změny uložíš do cloudu tlačítkem a na druhém zařízení je načteš. Automatickou synchronizaci můžeme přidat později.</p>
+        ${code ? `<div class="cloud-box"><p>Kód výletu: <span class="cloud-code">${escapeHtml(code)}</span></p><p>PIN: <span class="cloud-code">${escapeHtml(pin)}</span></p></div>` : `<p class="empty">Výlet zatím není sdílený v cloudu.</p>`}
+        <div class="button-row">
+          <button class="secondary" onclick="createOrShowCloudShare()">Vytvořit / zobrazit kód</button>
+          <button class="secondary" onclick="saveCurrentTripToCloud()">Uložit do cloudu</button>
+          <button class="ghost" onclick="loadCurrentTripFromCloud()">Načíst z cloudu</button>
+        </div>
+        <p id="cloudStatus" class="sync-status"></p>
+      </div>`;
+    }
+
+    function cloudReady() {
+      if (!firebaseDb) {
+        alert("Firebase není dostupný. Zkontroluj připojení k internetu a nastavení Firebase.");
+        return false;
+      }
+      return true;
+    }
+
+    function normalizeCloudCode(code) {
+      return String(code || "").trim().toUpperCase();
+    }
+
+    function generateCloudCode() {
+      return "TM-" + Math.random().toString(36).slice(2, 8).toUpperCase();
+    }
+
+    function generatePin() {
+      return String(Math.floor(1000 + Math.random() * 9000));
+    }
+
+    function setCloudStatus(message) {
+      const el = document.getElementById("cloudStatus");
+      if (el) el.textContent = message || "";
+    }
+
+    function setJoinCloudStatus(message) {
+      const el = document.getElementById("joinCloudStatus");
+      if (el) el.textContent = message || "";
+    }
+
+    function cloneForCloud(trip) {
+      const clone = JSON.parse(JSON.stringify(trip));
+      delete clone.cloudPin;
+      return clone;
+    }
+
+    function prepareCloudTrip(remoteTrip, code, pin) {
+      const trip = JSON.parse(JSON.stringify(remoteTrip || {}));
+      trip.cloudCode = normalizeCloudCode(code);
+      trip.cloudPin = String(pin || "");
+      migrateTrip(trip);
+      return trip;
+    }
+
+    async function createOrShowCloudShare() {
+      const trip = getCurrentTrip();
+      if (!trip) return;
+      if (!trip.cloudCode) trip.cloudCode = generateCloudCode();
+      if (!trip.cloudPin) trip.cloudPin = generatePin();
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      renderDetail();
+      await saveCurrentTripToCloud(false);
+      alert(`Sdílený výlet:\nKód: ${trip.cloudCode}\nPIN: ${trip.cloudPin}`);
+    }
+
+    async function saveCurrentTripToCloud(showAlert = true) {
+      if (!cloudReady()) return;
+      const trip = getCurrentTrip();
+      if (!trip) return;
+      if (!trip.cloudCode) trip.cloudCode = generateCloudCode();
+      if (!trip.cloudPin) trip.cloudPin = generatePin();
+
+      setCloudStatus("Ukládám do cloudu...");
+      try {
+        await firebaseDb.collection("sharedTrips").doc(normalizeCloudCode(trip.cloudCode)).set({
+          pin: String(trip.cloudPin),
+          updatedAt: new Date().toISOString(),
+          trip: cloneForCloud(trip)
+        });
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        setCloudStatus("Uloženo do cloudu.");
+        if (showAlert) alert("Výlet je uložený v cloudu.");
+      } catch (error) {
+        console.error(error);
+        setCloudStatus("Uložení do cloudu se nepovedlo.");
+        alert("Uložení do cloudu se nepovedlo. Zkontroluj Firestore a připojení.");
+      }
+    }
+
+    async function loadCurrentTripFromCloud() {
+      if (!cloudReady()) return;
+      const trip = getCurrentTrip();
+      if (!trip || !trip.cloudCode || !trip.cloudPin) {
+        alert("Výlet nemá cloudový kód. Nejdřív vytvoř kód nebo se připoj ke sdílenému výletu.");
+        return;
+      }
+
+      setCloudStatus("Načítám z cloudu...");
+      try {
+        const snap = await firebaseDb.collection("sharedTrips").doc(normalizeCloudCode(trip.cloudCode)).get();
+        if (!snap.exists) {
+          setCloudStatus("Výlet v cloudu nenalezen.");
+          alert("Výlet v cloudu nenalezen.");
+          return;
+        }
+        const payload = snap.data();
+        if (String(payload.pin) !== String(trip.cloudPin)) {
+          setCloudStatus("PIN nesouhlasí.");
+          alert("PIN nesouhlasí.");
+          return;
+        }
+        const incoming = prepareCloudTrip(payload.trip, trip.cloudCode, trip.cloudPin);
+        const index = data.trips.findIndex(t => t.id === trip.id);
+        if (index >= 0) data.trips[index] = incoming;
+        currentTripId = incoming.id;
+        saveData();
+        alert("Výlet byl načtený z cloudu.");
+      } catch (error) {
+        console.error(error);
+        setCloudStatus("Načtení z cloudu se nepovedlo.");
+        alert("Načtení z cloudu se nepovedlo. Zkontroluj Firestore a připojení.");
+      }
+    }
+
+    async function joinCloudTrip() {
+      if (!cloudReady()) return;
+      const code = normalizeCloudCode(val("joinCloudCode"));
+      const pin = String(val("joinCloudPin")).trim();
+      if (!code || !pin) {
+        alert("Vyplň kód výletu i PIN.");
+        return;
+      }
+
+      setJoinCloudStatus("Načítám výlet...");
+      try {
+        const snap = await firebaseDb.collection("sharedTrips").doc(code).get();
+        if (!snap.exists) {
+          setJoinCloudStatus("Výlet nenalezen.");
+          alert("Výlet s tímto kódem nebyl nalezen.");
+          return;
+        }
+        const payload = snap.data();
+        if (String(payload.pin) !== pin) {
+          setJoinCloudStatus("PIN nesouhlasí.");
+          alert("PIN nesouhlasí.");
+          return;
+        }
+
+        const incoming = prepareCloudTrip(payload.trip, code, pin);
+        const existingIndex = data.trips.findIndex(t => normalizeCloudCode(t.cloudCode) === code || t.id === incoming.id);
+        if (existingIndex >= 0) {
+          data.trips[existingIndex] = incoming;
+        } else {
+          data.trips.push(incoming);
+        }
+        currentTripId = incoming.id;
+        currentTab = "overview";
+        setVal("joinCloudCode", "");
+        setVal("joinCloudPin", "");
+        saveData();
+      } catch (error) {
+        console.error(error);
+        setJoinCloudStatus("Připojení se nepovedlo.");
+        alert("Připojení se nepovedlo. Zkontroluj Firestore a připojení.");
+      }
+    }
+
     function renderTrips() { const list=document.getElementById("tripList"); if(!data.trips.length){list.innerHTML='<div class="empty">Zatím nemáš žádný výlet. Přidej první nahoře.</div>'; return;} list.innerHTML=data.trips.map(trip=>{migrateTrip(trip); const c=getDisplayCurrency(trip), b=getBudgetTotal(trip,c), s=getExpenseTotal(trip,c); return `<div class="trip-card" onclick="openTrip('${trip.id}')"><h3>${escapeHtml(trip.name)}</h3><p class="muted">${formatDate(trip.from)} ${trip.to ? "- " + formatDate(trip.to) : ""}</p><p><span class="pill">${currencyLabel(c)}</span></p><p class="muted">Budget: ${formatMoney(b,c)}</p><p class="muted">Zbývá: ${formatMoney(b-s,c)}</p></div>`;}).join(""); }
     function renderDetail() { const trip=getCurrentTrip(); if(!trip) return; migrateTrip(trip); const c=getDisplayCurrency(trip), b=getBudgetTotal(trip,c), s=getExpenseTotal(trip,c); document.getElementById("detailTitle").textContent=trip.name; document.getElementById("detailDates").textContent=`${formatDate(trip.from)} ${trip.to ? "- " + formatDate(trip.to) : ""}`; document.getElementById("summaryBudget").textContent=formatMoney(b,c); document.getElementById("summarySpent").textContent=formatMoney(s,c); document.getElementById("summaryLeft").textContent=formatMoney(b-s,c); ["overview","finance","itinerary","places","notes","transport"].forEach(tab=>{document.getElementById(`${tab}Tab`).classList.toggle("hidden", currentTab!==tab); document.getElementById(`tab${capitalize(tab)}`).classList.toggle("active", currentTab===tab);}); renderOverview(trip); renderFinance(trip); renderItinerary(trip); renderPlaces(trip); renderNotes(trip); renderTransport(trip); renderConverter(); }
-    function renderOverview(trip) { const c=getDisplayCurrency(trip), b=getBudgetTotal(trip,c), s=getExpenseTotal(trip,c), left=b-s; const diff=daysUntil(trip.from); let daysText="Datum začátku není vyplněné."; if(diff!==null){ if(diff>0) daysText=`Do začátku výletu zbývá ${diff} dní.`; else if(diff===0) daysText="Výlet začíná dnes."; else daysText=`Výlet začal před ${Math.abs(diff)} dny.`; } const statusCounts={planned:0,done:0,changed:0,skipped:0}; trip.days.forEach(d=>statusCounts[d.dayStatus||"planned"]++); const plan=trip.days.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||"")).slice(0,5).map(d=>`<p><strong>Den ${d.dayNumber}</strong> - ${formatDate(d.date)} ${escapeHtml(d.location||"")} <span class="pill ${dayStatusClass(d.dayStatus)}">${dayStatusText(d.dayStatus)}</span></p>`).join("") || '<p class="empty">Zatím není vytvořený itinerář.</p>'; const counts=Object.fromEntries(noteCategories.map(cat=>[cat, trip.notes.filter(n=>n.category===cat).length])); const checklistNotes=trip.notes.filter(n=>(n.type||"note")==="checklist"); const checklistDone=checklistNotes.reduce((sum,l)=>sum+(l.items||[]).filter(i=>i.done).length,0); const checklistTotal=checklistNotes.reduce((sum,l)=>sum+(l.items||[]).length,0); const catTotals={}; trip.expenses.forEach(e=>catTotals[e.category]=(catTotals[e.category]||0)+convert(e.amount,e.currency,c)); const catHtml=Object.keys(catTotals).length ? Object.entries(catTotals).map(([cat,amount])=>`<p>${cat}: <strong>${formatMoney(amount,c)}</strong></p>`).join("") : '<p class="empty">Zatím nejsou zadané žádné výdaje.</p>'; document.getElementById("overviewTab").innerHTML=`<div class="card"><h3>Rychlý přehled</h3><p><strong>Měna zobrazení:</strong> ${currencyLabel(c)}</p><p><strong>${daysText}</strong></p><p><strong>Stav itineráře:</strong> ${statusCounts.done} splněno / ${statusCounts.changed} změněno / ${statusCounts.skipped} neuskutečněno / ${statusCounts.planned} plánováno</p><p><strong>Checklisty v poznámkách:</strong> ${checklistDone} / ${checklistTotal} položek hotovo</p><div class="button-row"><button class="secondary" onclick="setTab('itinerary')">Otevřít itinerář</button><button class="secondary" onclick="setTab('notes')">Otevřít poznámky</button></div></div><div class="card"><h3>Plán cesty</h3>${plan}</div><div class="card"><h3>Výdaje</h3><p>Budget: <strong>${formatMoney(b,c)}</strong></p><p>Utraceno: <strong>${formatMoney(s,c)}</strong></p><p>Zbývá: <strong>${formatMoney(left,c)}</strong></p><hr style="border:none;border-top:1px solid var(--border);margin:12px 0;"/>${catHtml}</div><div class="card"><h3>Poznámky</h3><p>Informace: <strong>${counts.Informace}</strong></p><p>Dokumenty: <strong>${counts.Dokumenty}</strong></p><p>Deník: <strong>${counts.Deník}</strong></p><div class="button-row"><button class="secondary" onclick="setTab('notes')">Přejít na poznámky</button></div></div><div class="card"><h3>Správa výletu</h3><p class="muted">Tady si můžeš výlet zazálohovat nebo obnovit ze souboru.</p><div class="button-row"><button class="secondary" onclick="exportCurrentTrip()">Exportovat výlet</button><button class="ghost" onclick="document.getElementById('importTripFile').click()">Importovat výlet</button><input id="importTripFile" type="file" accept="application/json,.json" class="hidden" onchange="importTripFile(this)" /><button class="danger" onclick="deleteTrip('${trip.id}')">Smazat výlet</button></div></div>`; }
+    function renderOverview(trip) { const c=getDisplayCurrency(trip), b=getBudgetTotal(trip,c), s=getExpenseTotal(trip,c), left=b-s; const diff=daysUntil(trip.from); let daysText="Datum začátku není vyplněné."; if(diff!==null){ if(diff>0) daysText=`Do začátku výletu zbývá ${diff} dní.`; else if(diff===0) daysText="Výlet začíná dnes."; else daysText=`Výlet začal před ${Math.abs(diff)} dny.`; } const statusCounts={planned:0,done:0,changed:0,skipped:0}; trip.days.forEach(d=>statusCounts[d.dayStatus||"planned"]++); const plan=trip.days.slice().sort((a,b)=>(a.date||"").localeCompare(b.date||"")).slice(0,5).map(d=>`<p><strong>Den ${d.dayNumber}</strong> - ${formatDate(d.date)} ${escapeHtml(d.location||"")} <span class="pill ${dayStatusClass(d.dayStatus)}">${dayStatusText(d.dayStatus)}</span></p>`).join("") || '<p class="empty">Zatím není vytvořený itinerář.</p>'; const counts=Object.fromEntries(noteCategories.map(cat=>[cat, trip.notes.filter(n=>n.category===cat).length])); const checklistNotes=trip.notes.filter(n=>(n.type||"note")==="checklist"); const checklistDone=checklistNotes.reduce((sum,l)=>sum+(l.items||[]).filter(i=>i.done).length,0); const checklistTotal=checklistNotes.reduce((sum,l)=>sum+(l.items||[]).length,0); const catTotals={}; trip.expenses.forEach(e=>catTotals[e.category]=(catTotals[e.category]||0)+convert(e.amount,e.currency,c)); const catHtml=Object.keys(catTotals).length ? Object.entries(catTotals).map(([cat,amount])=>`<p>${cat}: <strong>${formatMoney(amount,c)}</strong></p>`).join("") : '<p class="empty">Zatím nejsou zadané žádné výdaje.</p>'; document.getElementById("overviewTab").innerHTML=`<div class="card"><h3>Rychlý přehled</h3><p><strong>Měna zobrazení:</strong> ${currencyLabel(c)}</p><p><strong>${daysText}</strong></p><p><strong>Stav itineráře:</strong> ${statusCounts.done} splněno / ${statusCounts.changed} změněno / ${statusCounts.skipped} neuskutečněno / ${statusCounts.planned} plánováno</p><p><strong>Checklisty v poznámkách:</strong> ${checklistDone} / ${checklistTotal} položek hotovo</p><div class="button-row"><button class="secondary" onclick="setTab('itinerary')">Otevřít itinerář</button><button class="secondary" onclick="setTab('notes')">Otevřít poznámky</button></div></div><div class="card"><h3>Plán cesty</h3>${plan}</div><div class="card"><h3>Výdaje</h3><p>Budget: <strong>${formatMoney(b,c)}</strong></p><p>Utraceno: <strong>${formatMoney(s,c)}</strong></p><p>Zbývá: <strong>${formatMoney(left,c)}</strong></p><hr style="border:none;border-top:1px solid var(--border);margin:12px 0;"/>${catHtml}</div><div class="card"><h3>Poznámky</h3><p>Informace: <strong>${counts.Informace}</strong></p><p>Dokumenty: <strong>${counts.Dokumenty}</strong></p><p>Deník: <strong>${counts.Deník}</strong></p><div class="button-row"><button class="secondary" onclick="setTab('notes')">Přejít na poznámky</button></div></div>${cloudShareHtml(trip)}<div class="card"><h3>Správa výletu</h3><p class="muted">Tady si můžeš výlet zazálohovat nebo obnovit ze souboru.</p><div class="button-row"><button class="secondary" onclick="exportCurrentTrip()">Exportovat výlet</button><button class="ghost" onclick="document.getElementById('importTripFile').click()">Importovat výlet</button><input id="importTripFile" type="file" accept="application/json,.json" class="hidden" onchange="importTripFile(this)" /><button class="danger" onclick="deleteTrip('${trip.id}')">Smazat výlet</button></div></div>`; }
     function renderFinance(trip) { const c=getDisplayCurrency(trip); document.getElementById("financeTab").innerHTML=`<div class="card"><h3>Finanční zobrazení</h3><div class="row two"><div><label>Zobrazit finance v</label><select id="financeDisplayCurrency" onchange="changeDisplayCurrency(this.value)"><option value="EUR" ${c==="EUR"?"selected":""}>EUR</option><option value="CZK" ${c==="CZK"?"selected":""}>Kč</option><option value="LEK" ${c==="LEK"?"selected":""}>LEK</option></select></div></div><p class="small">Přepínáš jen zobrazení souhrnů. Původní měny záznamů zůstávají zachované.</p></div><div class="card"><h3>Převodník měn</h3><div class="row three"><div><label>Částka</label><input id="convAmount" type="number" inputmode="decimal" placeholder="Např. 100" oninput="renderConverter()" /></div><div><label>Z měny</label><select id="convCurrency" onchange="renderConverter()"><option value="EUR">EUR</option><option value="CZK">Kč</option><option value="LEK">LEK</option></select></div><div><label>Zobrazit</label><select id="convTarget" onchange="renderConverter()"><option value="ALL">Všechny měny</option><option value="EUR">EUR</option><option value="CZK">Kč</option><option value="LEK">LEK</option></select></div></div><div id="converterResult" class="converter-result"></div><p class="small">Pevné orientační kurzy podle zadání.</p></div><div class="card"><div class="button-row"><button onclick="toggleForm('budgetForm')">+ Přidat budget</button><button class="secondary" onclick="toggleForm('expenseForm')">+ Přidat výdaj</button></div></div>${budgetFormHtml()}${expenseFormHtml()}<div class="card"><h3>Budget záznamy</h3><div id="budgetList">${budgetListHtml(trip,c)}</div></div><div class="card"><h3>Výdaje</h3><div id="expenseList">${expenseListHtml(trip,c)}</div></div>`; }
     function budgetFormHtml(){return `<div id="budgetForm" class="card hidden"><h3>Přidat budget</h3><div class="row two"><div><label>Datum</label><input id="budgetDate" type="date" /></div><div><label>Částka</label><input id="budgetAmount" type="number" inputmode="decimal" /></div><div><label>Měna</label><select id="budgetCurrency"><option value="EUR">EUR</option><option value="CZK">Kč</option><option value="LEK">LEK</option></select></div><div><label>Typ</label><select id="budgetType"><option>Startovní hotovost</option><option>Výběr z bankomatu</option><option>Směna</option><option>Doplnění budgetu</option><option>Ostatní</option></select></div><div><label>Komu peníze patří</label><input id="budgetOwner" placeholder="Např. Denisa / muž / společné" /></div><div><label>Kdo je měl / vybíral</label><input id="budgetHolder" placeholder="Např. Denisa" /></div></div><div style="margin-top:10px;"><label>Poznámka / místo</label><input id="budgetNote" /></div><div class="button-row"><button onclick="addBudget()">Uložit budget</button></div></div>`;}
     function expenseFormHtml(){return `<div id="expenseForm" class="card hidden"><h3>Přidat výdaj</h3><div class="row two"><div><label>Datum</label><input id="expenseDate" type="date" /></div><div><label>Popis</label><input id="expenseTitle" /></div><div><label>Částka</label><input id="expenseAmount" type="number" inputmode="decimal" /></div><div><label>Měna</label><select id="expenseCurrency"><option value="EUR">EUR</option><option value="CZK">Kč</option><option value="LEK">LEK</option></select></div><div><label>Kategorie</label><select id="expenseCategory"><option>Jídlo</option><option>Zábava</option><option>Dárky</option><option>Ostatní</option></select></div><div><label>Poznámka</label><input id="expenseNote" /></div></div><div class="button-row"><button onclick="addExpense()">Uložit výdaj</button></div></div>`;}
