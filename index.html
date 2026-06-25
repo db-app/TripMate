@@ -430,7 +430,7 @@
     function renumberDays(trip) { trip.days.sort((a,b)=>(a.date||"").localeCompare(b.date||"")).forEach((d,i)=>d.dayNumber=i+1); }
     function addBudget() { const trip=getCurrentTrip(); const amount=Number(val("budgetAmount")); const currency=val("budgetCurrency"); if(!amount){alert("Vyplň částku budgetu."); return;} trip.budgets.push({id:id(), date:val("budgetDate")||today(), amount, currency, type:val("budgetType"), owner:val("budgetOwner").trim(), holder:val("budgetHolder").trim(), note:val("budgetNote").trim()}); clearFields(["budgetDate","budgetAmount","budgetOwner","budgetHolder","budgetNote"]); saveData(); }
     function addExpense() { const trip=getCurrentTrip(); const title=val("expenseTitle").trim(); const amount=Number(val("expenseAmount")); const currency=val("expenseCurrency"); if(!title||!amount){alert("Vyplň popis a částku výdaje."); return;} trip.expenses.push({id:id(), date:val("expenseDate")||today(), title, amount, currency, category:val("expenseCategory"), note:val("expenseNote").trim()}); clearFields(["expenseDate","expenseTitle","expenseAmount","expenseNote"]); saveData(); }
-    function addTransport() { const trip=getCurrentTrip(); const from=val("transportFrom").trim(), to=val("transportTo").trim(); if(!from&&!to){alert("Vyplň alespoň odkud nebo kam."); return;} trip.transport.push({id:id(), type:val("transportType"), isStopover:val("transportStopover"), from, to, date:val("transportDate"), departure:val("transportDeparture"), arrival:val("transportArrival"), number:val("transportNumber").trim(), note:val("transportNote").trim()}); clearFields(["transportFrom","transportTo","transportDate","transportDeparture","transportArrival","transportNumber","transportNote"]); saveData(); }
+    function addTransport() { const trip=getCurrentTrip(); const from=val("transportFrom").trim(), to=val("transportTo").trim(); if(!from&&!to){alert("Vyplň alespoň odkud nebo kam."); return;} trip.transport.push({id:id(), type:val("transportType"), isStopover:val("transportStopover"), from, to, date:val("transportDate"), departure:val("transportDeparture"), arrival:val("transportArrival"), number:val("transportNumber").trim(), note:val("transportNote").trim()}); clearFields(["transportFrom","transportTo","transportDate","transportDeparture","transportArrival","transportNumber","transportNote"]); const f=document.getElementById("transportForm"); if(f) f.classList.add("hidden"); saveData(); }
     function startEditTransport(transportId) {
       editingTransportId = transportId;
       renderDetail();
@@ -551,7 +551,7 @@
       const pin = trip.cloudPin || "";
       return `<div class="card">
         <h3>Sdílení výletu</h3>
-        <p class="muted">Auto sync je jednoduchý a opatrný: po změně se výlet za pár vteřin uloží do cloudu a otevřený výlet se pravidelně kontroluje proti cloudu. Ruční tlačítka zůstávají jako pojistka.</p>
+        <p class="muted">Auto sync je opatrný: po uložené změně se výlet za pár vteřin uloží do cloudu. Načítání z cloudu se pozastaví, když máš otevřený formulář nebo něco edituješ, aby nezmizely rozepsané změny. Ruční tlačítka zůstávají jako pojistka.</p>
         ${code ? `<div class="cloud-box"><p>Kód výletu: <span class="cloud-code">${escapeHtml(code)}</span></p><p>PIN: <span class="cloud-code">${escapeHtml(pin)}</span></p></div>` : `<p class="empty">Výlet zatím není sdílený v cloudu.</p>`}
         <div class="button-row">
           <button class="secondary" onclick="createOrShowCloudShare()">Vytvořit / zobrazit kód</button>
@@ -624,10 +624,27 @@
       }
     }
 
+
+    function isUserEditingSomething() {
+      const active = document.activeElement;
+      if (active && ["INPUT", "TEXTAREA", "SELECT"].includes(active.tagName)) return true;
+      if (editingDayId || editingTransportId || editingPlaceId || editingNoteId) return true;
+
+      const visibleFormIds = ["tripForm", "budgetForm", "expenseForm", "dayForm", "placeForm", "noteForm", "transportForm"];
+      return visibleFormIds.some(formId => {
+        const el = document.getElementById(formId);
+        return el && !el.classList.contains("hidden");
+      });
+    }
+
     function maybeAutoLoadFromCloud() {
       const trip = getCurrentTrip();
       if (!trip || !trip.cloudCode || !trip.cloudPin || trip.autoSyncEnabled === false) return;
       if (!firebaseDb) return;
+      if (isUserEditingSomething()) {
+        setCloudStatus("Auto sync pozastavený během úprav.");
+        return;
+      }
       if (Date.now() - autoSyncLastLoadAt < 8000) return;
       autoSyncLastLoadAt = Date.now();
       loadCurrentTripFromCloud(true);
